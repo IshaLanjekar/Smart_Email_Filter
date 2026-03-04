@@ -28,11 +28,17 @@ def authenticate_gmail():
     return service
 
 
-def get_emails(service, max_results=10):
-    results = service.users().messages().list(
-        userId='me', maxResults=max_results, labelIds=['INBOX']
-    ).execute()
+def get_emails(service, max_results=10, page_token=None):
+    kwargs = {
+        'userId': 'me',
+        'maxResults': max_results,
+        'labelIds': ['INBOX'],
+    }
+    if page_token:
+        kwargs['pageToken'] = page_token
+    results = service.users().messages().list(**kwargs).execute()
     messages = results.get('messages', [])
+    next_page_token = results.get('nextPageToken', None)
 
     emails = []
     for msg in messages:
@@ -65,7 +71,7 @@ def get_emails(service, max_results=10):
             'snippet': message.get('snippet', '')
         })
 
-    return emails
+    return emails, next_page_token
 
 
 def classify_emails(emails):
