@@ -1,0 +1,40 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# OAuth tokens (SENSITIVE - never commit)
+token.pickle
+
+# Google OAuth credentials (SENSITIVE)
+credentials.json
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Byte-compiled / optimized
+*.pyc
+
+# Dataset zip (large, not needed in repo)
+sms-spam-collection-dataset.zip
+
+# Runtime generated files
+report_history.json
+report_settings.json
+user_keywords.json
+email_history.csv
+email_report_*.csv
+test_report.csv
+test_training_data.csv
