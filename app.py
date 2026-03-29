@@ -247,37 +247,6 @@ def classify_email(spam_model, vectorizer, category_model, email_data, user_keyw
     prediction = spam_model.predict(vec)[0]
     confidence = spam_model.predict_proba(vec)[0]
 
-    # KEYWORD OVERRIDE: If email matches user keywords, it is NEVER spam
-    if matched_kw:
-        email_data['prediction'] = 'NOT SPAM'
-        email_data['confidence'] = max(confidence[0], confidence[1]) * 100
-
-        # Still categorize it
-        try:
-            cat = category_model.predict(vec)[0]
-            cat_map = {'work': 'Work', 'promotional': 'Promotional', 'academic': 'Academic'}
-            email_data['category'] = cat_map.get(cat, cat.title())
-        except Exception:
-            email_data['category'] = 'General'
-
-        combined = text.lower()
-        if any(w in combined for w in ['meeting', 'schedule', 'calendar', 'appointment', 'agenda']):
-            email_data['sub_category'] = 'Work/Meetings'
-        elif any(w in combined for w in ['invoice', 'payment', 'receipt', 'order', 'shipping', 'delivery']):
-            email_data['sub_category'] = 'Transactions'
-        elif any(w in combined for w in ['newsletter', 'update', 'weekly', 'digest', 'subscribe']):
-            email_data['sub_category'] = 'Newsletters'
-        elif any(w in combined for w in ['friend', 'family', 'birthday', 'hi ', 'hello', 'hey']):
-            email_data['sub_category'] = 'Personal'
-        elif any(w in combined for w in ['github', 'code', 'deploy', 'server', 'error', 'bug']):
-            email_data['sub_category'] = 'Technical'
-        elif any(w in combined for w in ['noreply', 'notification', 'alert', 'confirm']):
-            email_data['sub_category'] = 'Notifications'
-        else:
-            email_data['sub_category'] = email_data['category']
-
-        return email_data
-
     if prediction == 1:
         email_data['prediction'] = 'SPAM'
         email_data['confidence'] = confidence[1] * 100
@@ -418,21 +387,12 @@ def _parse_email_message(service, msg_id):
     }
 
 
-def fetch_emails(service, max_results=50, page_token=None):
-    """Fetch inbox emails with pagination support.
-    Returns (emails_list, next_page_token).
-    """
-    kwargs = {
-        'userId': 'me',
-        'maxResults': max_results,
-        'labelIds': ['INBOX'],
-    }
-    if page_token:
-        kwargs['pageToken'] = page_token
-
-    results = service.users().messages().list(**kwargs).execute()
+def fetch_emails(service, max_results=50):
+    """Fetch inbox emails."""
+    results = service.users().messages().list(
+        userId='me', maxResults=max_results, labelIds=['INBOX']
+    ).execute()
     messages = results.get('messages', [])
-    next_page_token = results.get('nextPageToken', None)
 
     emails = []
     for msg in messages:
@@ -440,7 +400,7 @@ def fetch_emails(service, max_results=50, page_token=None):
             emails.append(_parse_email_message(service, msg['id']))
         except Exception:
             continue
-    return emails, next_page_token
+    return emails
 
 
 def fetch_new_emails(service, known_ids, max_results=20):
@@ -477,48 +437,10 @@ _defaults = {
     'report_settings': load_report_settings(),
     'report_history': load_report_history(),
     'report_notifications': [],
-    'next_page_token': None,
-    'load_more_in_progress': False,
-    'all_checked_emails_saved': False,
-    'keywords_confirmed': False,
 }
 for _key, _val in _defaults.items():
     if _key not in st.session_state:
         st.session_state[_key] = _val
-
-# ===================== CHECKED EMAILS STORAGE =====================
-CHECKED_EMAILS_FILE = 'checked_emails.csv'
-
-def save_checked_emails(emails):
-    """Save all checked/classified emails to a CSV file."""
-    rows = []
-    for e in emails:
-        rows.append({
-            'id': e.get('id', ''),
-            'subject': e.get('subject', ''),
-            'sender': e.get('sender', ''),
-            'date': e.get('date', ''),
-            'snippet': e.get('snippet', ''),
-            'prediction': e.get('prediction', ''),
-            'confidence': e.get('confidence', 0),
-            'category': e.get('category', ''),
-            'sub_category': e.get('sub_category', ''),
-            'importance': e.get('importance', ''),
-            'matched_keywords': ', '.join(e.get('matched_keywords', [])),
-            'is_unread': e.get('is_unread', False),
-        })
-    df = pd.DataFrame(rows)
-    df.to_csv(CHECKED_EMAILS_FILE, index=False)
-    return df
-
-def load_checked_emails():
-    """Load previously checked emails from CSV."""
-    if os.path.exists(CHECKED_EMAILS_FILE):
-        try:
-            return pd.read_csv(CHECKED_EMAILS_FILE)
-        except Exception:
-            return pd.DataFrame()
-    return pd.DataFrame()
 
 
 # ============================================================
@@ -581,79 +503,6 @@ if not st.session_state.gmail_connected:
 
 
 # ============================================================
-# STEP 1.5: KEYWORD SETUP (must happen before fetching)
-# ============================================================
-if not st.session_state.keywords_confirmed:
-    st.title("📧 Gmail Spam Detector")
-    st.markdown(f"Connected to **{st.session_state.profile.get('email', '')}**")
-    st.markdown("---")
-
-    st.markdown("### 🔑 Set Your Keywords First")
-    st.markdown(
-        "Before fetching emails, **set keywords** that are important to you. "
-        "Emails matching these keywords will **never be marked as spam**, "
-        "regardless of what the model predicts."
-    )
-    st.info("💡 Examples: your name, project names, company name, meeting, invoice, etc.")
-
-    # Show existing keywords
-    if st.session_state.user_keywords:
-        st.markdown("**Your current keywords:**")
-        kw_html = ""
-        for kw in st.session_state.user_keywords:
-            kw_html += f'<span style="background:#e8f5e9;padding:4px 12px;border-radius:12px;margin:2px 4px;display:inline-block;font-weight:bold;">✅ {kw}</span> '
-        st.markdown(kw_html, unsafe_allow_html=True)
-        st.markdown("")
-
-    # Add keywords
-    col_kw1, col_kw2 = st.columns([3, 1])
-    with col_kw1:
-        new_kw = st.text_input(
-            "Add a keyword:",
-            placeholder="e.g. meeting, invoice, project-name…",
-            key="setup_kw_input"
-        )
-    with col_kw2:
-        st.write("")  # spacer
-        st.write("")  # spacer
-        if st.button("➕ Add Keyword", key="setup_kw_add_btn", type="primary"):
-            if new_kw.strip():
-                kw = new_kw.strip().lower()
-                if kw not in [k.lower() for k in st.session_state.user_keywords]:
-                    st.session_state.user_keywords.append(kw)
-                    save_keywords(st.session_state.user_keywords)
-                    st.rerun()
-                else:
-                    st.warning("Keyword already exists.")
-
-    # Remove keywords
-    if st.session_state.user_keywords:
-        remove_kw = st.selectbox(
-            "Remove a keyword:",
-            [''] + st.session_state.user_keywords,
-            key="setup_kw_remove"
-        )
-        if remove_kw and st.button("🗑️ Remove", key="setup_kw_remove_btn"):
-            st.session_state.user_keywords.remove(remove_kw)
-            save_keywords(st.session_state.user_keywords)
-            st.rerun()
-
-    st.markdown("---")
-
-    # Confirm and proceed
-    if st.session_state.user_keywords:
-        st.success(f"✅ You have **{len(st.session_state.user_keywords)}** keyword(s) set. Ready to fetch emails!")
-        if st.button("📥 Continue — Fetch & Analyze Emails", type="primary", use_container_width=True):
-            st.session_state.keywords_confirmed = True
-            st.rerun()
-    else:
-        st.warning("⚠️ Please add at least one keyword before proceeding.")
-        st.caption("Keywords ensure important emails are never misclassified as spam.")
-
-    st.stop()
-
-
-# ============================================================
 # STEP 2: INITIAL EMAIL FETCH + CLASSIFY
 # ============================================================
 if not st.session_state.emails_loaded:
@@ -666,8 +515,7 @@ if not st.session_state.emails_loaded:
 
     try:
         status_msg.info("📥 Fetching your inbox…")
-        emails, next_token = fetch_emails(st.session_state.service, max_results=30)
-        st.session_state.next_page_token = next_token
+        emails = fetch_emails(st.session_state.service, max_results=30)
         progress.progress(0.4, text=f"Fetched {len(emails)} emails. Classifying…")
 
         if not emails:
@@ -688,7 +536,6 @@ if not st.session_state.emails_loaded:
         st.session_state.classified_emails = classified
         st.session_state.last_check = datetime.now()
         st.session_state.emails_loaded = True
-        save_checked_emails(classified)
         progress.empty()
         status_msg.empty()
         st.rerun()
@@ -842,26 +689,10 @@ st.title("📧 Gmail Spam Detector")
 profile = st.session_state.profile
 last_time = st.session_state.last_check
 last_str = last_time.strftime('%I:%M:%S %p') if last_time else 'N/A'
-
-# Header row with connection info and disconnect button
-hdr_col1, hdr_col2 = st.columns([4, 1])
-with hdr_col1:
-    st.markdown(
-        f"Connected to: **{profile.get('email', '')}** &nbsp;|&nbsp; "
-        f"Last checked: **{last_str}**"
-    )
-with hdr_col2:
-    if st.button("🔌 Disconnect", key="main_disconnect_btn", type="secondary"):
-        st.session_state.gmail_connected = False
-        st.session_state.service = None
-        st.session_state.emails_loaded = False
-        st.session_state.classified_emails = []
-        st.session_state.new_alerts = []
-        st.session_state.next_page_token = None
-        st.session_state.keywords_confirmed = False
-        if os.path.exists(TOKEN_FILE):
-            os.remove(TOKEN_FILE)
-        st.rerun()
+st.markdown(
+    f"Connected to: **{profile.get('email', '')}** &nbsp;|&nbsp; "
+    f"Last checked: **{last_str}**"
+)
 
 all_emails = st.session_state.classified_emails
 spam_emails = [e for e in all_emails if e.get('prediction') == 'SPAM']
@@ -997,87 +828,6 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 # --- Tab 1: All Emails ---
 with tab1:
     st.markdown(f"### All Emails ({len(all_emails)})")
-
-    # --- Load More Emails (30 at a time) ---
-    total_inbox = profile.get('total_messages', 0)
-    loaded_count = len(all_emails)
-    has_more = st.session_state.next_page_token is not None
-
-    st.markdown(f"📬 **{loaded_count}** of ~**{total_inbox}** emails loaded and checked.")
-
-    if has_more:
-        col_btn1, col_btn2 = st.columns([1, 1])
-        with col_btn1:
-            if st.button("📥 Load More (next 30)", type="primary", key="load_more_btn", use_container_width=True):
-                with st.spinner("Fetching next 30 emails…"):
-                    try:
-                        new_emails, next_token = fetch_emails(
-                            st.session_state.service,
-                            max_results=30,
-                            page_token=st.session_state.next_page_token
-                        )
-                        st.session_state.next_page_token = next_token
-
-                        known_ids = set(e['id'] for e in st.session_state.classified_emails)
-                        user_kw = st.session_state.user_keywords
-                        added = 0
-                        for email in new_emails:
-                            if email['id'] not in known_ids:
-                                email = classify_email(spam_model, vectorizer, category_model, email, user_kw)
-                                st.session_state.classified_emails.append(email)
-                                known_ids.add(email['id'])
-                                added += 1
-
-                        save_checked_emails(st.session_state.classified_emails)
-                        st.toast(f"✅ +{added} emails! Total: {len(st.session_state.classified_emails)}")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Failed to load more: {e}")
-
-        with col_btn2:
-            if st.button("📥📥 Load ALL Remaining", key="load_all_btn", use_container_width=True):
-                progress_bar = st.progress(0, text="Loading all emails in batches of 30…")
-                status_text = st.empty()
-                try:
-                    token = st.session_state.next_page_token
-                    batch_num = 0
-                    known_ids = set(e['id'] for e in st.session_state.classified_emails)
-                    user_kw = st.session_state.user_keywords
-                    total_added = 0
-
-                    while token:
-                        batch_num += 1
-                        status_text.info(f"📥 Batch {batch_num} — {len(st.session_state.classified_emails)} emails loaded so far…")
-                        new_emails, token = fetch_emails(
-                            st.session_state.service,
-                            max_results=30,
-                            page_token=token
-                        )
-
-                        for email in new_emails:
-                            if email['id'] not in known_ids:
-                                email = classify_email(spam_model, vectorizer, category_model, email, user_kw)
-                                st.session_state.classified_emails.append(email)
-                                known_ids.add(email['id'])
-                                total_added += 1
-
-                        if total_inbox > 0:
-                            pct = min(len(st.session_state.classified_emails) / total_inbox, 1.0)
-                            progress_bar.progress(pct, text=f"Loaded {len(st.session_state.classified_emails)} / ~{total_inbox}")
-
-                    st.session_state.next_page_token = None
-                    save_checked_emails(st.session_state.classified_emails)
-                    progress_bar.empty()
-                    status_text.success(f"✅ Done! +{total_added} emails. Total: {len(st.session_state.classified_emails)}")
-                    st.rerun()
-                except Exception as e:
-                    progress_bar.empty()
-                    status_text.error(f"❌ Error: {e}")
-    else:
-        if loaded_count > 0:
-            st.success(f"✅ All **{loaded_count}** inbox emails loaded and checked!")
-
-    st.markdown("---")
 
     search = st.text_input("🔍 Search emails:", placeholder="Search by subject, sender…")
 
@@ -1408,9 +1158,15 @@ with st.sidebar:
         st.session_state.emails_loaded = False
         st.session_state.classified_emails = []
         st.session_state.new_alerts = []
-        st.session_state.next_page_token = None
-        st.session_state.keywords_confirmed = False
         st.rerun()
+
+    st.divider()
+
+    st.header("📊 Quick Stats")
+    st.metric("Total", len(all_emails))
+    st.metric("Spam", len(spam_emails))
+    st.metric("Safe", len(safe_emails))
+    st.metric("Unread", len(unread_emails))
 
     st.divider()
 
@@ -1534,19 +1290,15 @@ with st.sidebar:
 
     st.divider()
 
-    # Download all checked emails
-    if st.session_state.classified_emails:
-        st.divider()
-        st.header("💾 Checked Emails")
-        st.caption(f"{len(st.session_state.classified_emails)} emails checked so far")
-        checked_df = save_checked_emails(st.session_state.classified_emails)
-        st.download_button(
-            "📥 Download All Checked Emails",
-            data=checked_df.to_csv(index=False),
-            file_name=f"checked_emails_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv",
-            key="sidebar_dl_checked"
-        )
+    if st.button("🔌 Disconnect Gmail", width='stretch'):
+        st.session_state.gmail_connected = False
+        st.session_state.service = None
+        st.session_state.emails_loaded = False
+        st.session_state.classified_emails = []
+        st.session_state.new_alerts = []
+        if os.path.exists(TOKEN_FILE):
+            os.remove(TOKEN_FILE)
+        st.rerun()
 
     st.divider()
 
