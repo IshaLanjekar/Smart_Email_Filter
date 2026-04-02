@@ -5,14 +5,24 @@ import os
 import json
 import base64
 import pandas as pd
-import nltk
 from datetime import datetime, timedelta
-from nltk.corpus import stopwords
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-nltk.download('stopwords', quiet=True)
+try:
+    import nltk
+    from nltk.corpus import stopwords
+    nltk.download('stopwords', quiet=True)
+    _stop_words = set(stopwords.words('english'))
+except Exception:
+    nltk = None
+    _stop_words = {
+        'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'had',
+        'has', 'have', 'he', 'her', 'his', 'i', 'in', 'is', 'it', 'its', 'me',
+        'my', 'not', 'of', 'on', 'or', 'our', 'she', 'so', 'that', 'the', 'their',
+        'them', 'they', 'this', 'to', 'was', 'we', 'were', 'with', 'you', 'your'
+    }
 
 # ===================== PERSISTENCE FILES =====================
 KEYWORDS_FILE = 'user_keywords.json'
@@ -202,9 +212,6 @@ def load_models():
 # ============================================================
 # TEXT PREPROCESSING (must match train_model.py)
 # ============================================================
-_stop_words = set(stopwords.words('english'))
-
-
 def clean_text(text):
     text = text.lower()
     text = re.sub(r'[^a-zA-Z]', ' ', text)

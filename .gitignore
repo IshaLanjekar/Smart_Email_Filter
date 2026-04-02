@@ -38,3 +38,4 @@ email_history.csv
 email_report_*.csv
 test_report.csv
 test_training_data.csv
+.streamlit/secrets.toml
