@@ -203,9 +203,29 @@ st.markdown("""
 # ============================================================
 @st.cache_resource
 def load_models():
-    spam_model = pickle.load(open("spam_model.pkl", "rb"))
-    vectorizer = pickle.load(open("vectorizer_spam.pkl", "rb"))
-    category_model = pickle.load(open("category_model.pkl", "rb"))
+    spam_model_path = next(
+        (p for p in ["spam_model.pkl", "email_model.pkl"] if os.path.exists(p)),
+        None,
+    )
+    vectorizer_path = next(
+        (p for p in ["vectorizer_spam.pkl", "vectorizer.pkl"] if os.path.exists(p)),
+        None,
+    )
+    category_model_path = next(
+        (p for p in ["category_model.pkl"] if os.path.exists(p)),
+        None,
+    )
+
+    if not spam_model_path or not vectorizer_path:
+        raise FileNotFoundError(
+            "Required model files not found. Expected one of "
+            "['spam_model.pkl', 'email_model.pkl'] and one of "
+            "['vectorizer_spam.pkl', 'vectorizer.pkl']."
+        )
+
+    spam_model = pickle.load(open(spam_model_path, "rb"))
+    vectorizer = pickle.load(open(vectorizer_path, "rb"))
+    category_model = pickle.load(open(category_model_path, "rb")) if category_model_path else None
     return spam_model, vectorizer, category_model
 
 
