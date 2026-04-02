@@ -6,6 +6,7 @@ import json
 import base64
 import pandas as pd
 from datetime import datetime, timedelta
+from urllib.parse import parse_qs, urlparse
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -398,12 +399,45 @@ def get_gmail_service_silent():
 
 
 def run_oauth_flow():
-    """Full OAuth flow — opens browser for Google login."""
+    """Start OAuth flow and return auth URL for manual completion."""
     client_config = load_oauth_client_config()
-    flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
-    creds = flow.run_local_server(port=OAUTH_PORT)
+    flow = InstalledAppFlow.from_client_config(
+        client_config,
+        SCOPES,
+        redirect_uri='http://localhost'
+    )
+    auth_url, _ = flow.authorization_url(
+        access_type='offline',
+        include_granted_scopes='true',
+        prompt='consent'
+    )
+    st.session_state.oauth_flow = flow
+    return auth_url
+
+
+def complete_oauth_flow(auth_response_or_code):
+    """Complete OAuth using pasted redirect URL or code."""
+    flow = st.session_state.get('oauth_flow')
+    if not flow:
+        raise RuntimeError("OAuth session expired. Click Connect Gmail again.")
+
+    raw = (auth_response_or_code or '').strip()
+    if not raw:
+        raise ValueError("Paste the redirected URL or authorization code.")
+
+    code = raw
+    if raw.startswith('http://') or raw.startswith('https://'):
+        parsed = urlparse(raw)
+        code = parse_qs(parsed.query).get('code', [None])[0]
+
+    if not code:
+        raise ValueError("Could not find authorization code in the pasted value.")
+
+    flow.fetch_token(code=code)
+    creds = flow.credentials
     with open(TOKEN_FILE, 'wb') as f:
         pickle.dump(creds, f)
+    st.session_state.pop('oauth_flow', None)
     return build('gmail', 'v1', credentials=creds)
 
 
@@ -553,19 +587,40 @@ if not st.session_state.gmail_connected:
         )
         st.warning(
             "Make sure **credentials.json** is in the project folder "
-            "and your email is added as a **test user** in Google Cloud Console."
-        )
+                "Make sure Google OAuth credentials are configured (credentials.json locally or "
+                "[gmail].client_secret in Streamlit secrets) and your email is added as a "
+                "test user in Google Cloud Console."
 
         if st.button("🔐 Connect Gmail", type="primary", width='stretch'):
-            with st.spinner("Opening Google login in your browser…"):
                 try:
-                    service = run_oauth_flow()
-                    st.session_state.service = service
-                    st.session_state.gmail_connected = True
-                    st.session_state.profile = get_user_profile(service)
-                    st.rerun()
+                    auth_url = run_oauth_flow()
+                    st.session_state.oauth_auth_url = auth_url
                 except Exception as e:
                     st.error(f"❌ Connection failed: {e}")
+
+            if st.session_state.get('oauth_auth_url'):
+                st.markdown("Step 1: Open Google login")
+                st.markdown(f"[Open Google Login]({st.session_state.oauth_auth_url})")
+                st.caption(
+                    "After sign-in, Google redirects to localhost and that page may fail to load. "
+                    "Copy the full URL from your browser address bar and paste it below."
+                )
+                oauth_paste = st.text_input(
+                    "Step 2: Paste redirected URL or code",
+                    key="oauth_paste_value",
+                    placeholder="http://localhost/?code=..."
+                )
+                if st.button("Complete Gmail Connection", key="onboarding_complete_gmail", width='stretch'):
+                    with st.spinner("Completing Google authentication…"):
+                        try:
+                            service = complete_oauth_flow(oauth_paste)
+                            st.session_state.service = service
+                            st.session_state.gmail_connected = True
+                            st.session_state.profile = get_user_profile(service)
+                            st.session_state.pop('oauth_auth_url', None)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Connection failed: {e}")
 
         st.stop()  # Don't render rest of page until connected
 
