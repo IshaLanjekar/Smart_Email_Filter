@@ -94,20 +94,37 @@ def load_oauth_client_config():
         with open(CREDS_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
 
-    # Streamlit Cloud path: keep credentials in secrets.
+    # Streamlit Cloud path: support common secret formats.
+    def _normalize_client_config(value):
+        if not value:
+            return None
+        if isinstance(value, str):
+            value = json.loads(value)
+        if isinstance(value, dict) and ('installed' in value or 'web' in value):
+            return value
+        return None
+
     try:
-        gmail_secrets = st.secrets.get('gmail', {})
-        client_secret = gmail_secrets.get('client_secret')
-        if isinstance(client_secret, dict):
-            return client_secret
-        if isinstance(client_secret, str) and client_secret.strip():
-            return json.loads(client_secret)
+        secret_sources = [
+            st.secrets.get('gmail', {}).get('client_secret'),
+            st.secrets.get('gmail', {}).get('client_config'),
+            st.secrets.get('client_secret'),
+            st.secrets.get('client_config'),
+            dict(st.secrets) if ('installed' in st.secrets or 'web' in st.secrets) else None,
+        ]
+
+        for source in secret_sources:
+            config = _normalize_client_config(source)
+            if config:
+                return config
     except Exception:
         pass
 
     raise FileNotFoundError(
         "Google OAuth client config not found. Add credentials.json locally "
-        "or set [gmail].client_secret in Streamlit secrets."
+        "or set one of these in Streamlit secrets: [gmail].client_secret, "
+        "[gmail].client_config, client_secret, client_config, or paste full "
+        "OAuth JSON at top level."
     )
 
 # ===================== PAGE CONFIG =====================
