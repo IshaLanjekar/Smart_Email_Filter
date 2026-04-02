@@ -87,6 +87,29 @@ CREDS_FILE = 'credentials.json'
 OAUTH_PORT = 8090  # Fixed port — won't conflict with Streamlit (8501)
 AUTO_REFRESH_SECONDS = 30
 
+
+def load_oauth_client_config():
+    """Load Google OAuth client config from file or Streamlit secrets."""
+    if os.path.exists(CREDS_FILE):
+        with open(CREDS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+    # Streamlit Cloud path: keep credentials in secrets.
+    try:
+        gmail_secrets = st.secrets.get('gmail', {})
+        client_secret = gmail_secrets.get('client_secret')
+        if isinstance(client_secret, dict):
+            return client_secret
+        if isinstance(client_secret, str) and client_secret.strip():
+            return json.loads(client_secret)
+    except Exception:
+        pass
+
+    raise FileNotFoundError(
+        "Google OAuth client config not found. Add credentials.json locally "
+        "or set [gmail].client_secret in Streamlit secrets."
+    )
+
 # ===================== PAGE CONFIG =====================
 st.set_page_config(
     page_title="Gmail Spam Detector",
@@ -359,7 +382,8 @@ def get_gmail_service_silent():
 
 def run_oauth_flow():
     """Full OAuth flow — opens browser for Google login."""
-    flow = InstalledAppFlow.from_client_secrets_file(CREDS_FILE, SCOPES)
+    client_config = load_oauth_client_config()
+    flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
     creds = flow.run_local_server(port=OAUTH_PORT)
     with open(TOKEN_FILE, 'wb') as f:
         pickle.dump(creds, f)
