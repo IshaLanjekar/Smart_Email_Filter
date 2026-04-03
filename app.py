@@ -1,4 +1,4 @@
-﻿import streamlit as st
+import streamlit as st
 import streamlit.components.v1 as components
 import pickle
 import re
@@ -734,16 +734,16 @@ if not st.session_state.gmail_connected:
 # STEP 2: KEYWORD SETUP (FIRST PAGE AFTER CONNECT)
 # ============================================================
 if not st.session_state.emails_loaded and not st.session_state.ready_to_fetch:
-    st.title("📧 Gmail Spam Detector")
+    st.title("?? Gmail Spam Detector")
     st.markdown(f"Connected to **{st.session_state.profile.get('email', '')}**")
     st.markdown("---")
 
-    st.markdown("### 🔑 Set Your Keywords First")
+    st.markdown("### ?? Set Your Keywords First")
     st.markdown(
         "Before fetching emails, set keywords that are important to you. "
         "Emails matching these keywords will be marked as Important for easy tracking."
     )
-    st.info("💡 Examples: your name, project names, company name, meeting, invoice, etc.")
+    st.info("?? Examples: your name, project names, company name, meeting, invoice, etc.")
 
     st.markdown("**Your current keywords:**")
     current_kws = st.session_state.user_keywords
@@ -1007,32 +1007,32 @@ if st.session_state.gmail_connected and not profile.get('email'):
 
 hdr_left, hdr_right = st.columns([5, 1])
 with hdr_left:
-    st.markdown("# 📧 Gmail Spam Detector")
+    st.markdown("# ?? Gmail Spam Detector")
     st.markdown(
         f"Connected to: **{profile.get('email', '')}** &nbsp;|&nbsp; "
         f"Last checked: **{last_str}**"
     )
 with hdr_right:
     st.markdown("<div style='height: 0.35rem;'></div>", unsafe_allow_html=True)
-    if st.button("🔌 Disconnect Gmail", key="top_disconnect", width='stretch'):
+    if st.button("?? Disconnect Gmail", key="top_disconnect", width='stretch'):
         disconnect_gmail_session()
         st.rerun()
 
 st.markdown("""
 <div class="analyze-shell">
-    <strong>🚀 Analyze Inbox in Batches</strong><br>
+    <strong>?? Analyze Inbox in Batches</strong><br>
     Process emails in focused chunks of 30 for faster, cleaner review.
 </div>
 """, unsafe_allow_html=True)
 
 total_messages = int(profile.get('total_messages', 0) or 0)
 approx_remaining = max(total_messages - len(st.session_state.classified_emails), 0)
-if st.button("🚀 Analyze Next 30", key="main_analyze_next_30", type="primary", width='stretch'):
+if st.button("?? Analyze Next 30", key="main_analyze_next_30", type="primary", width='stretch'):
     try:
         service = st.session_state.service
         page_token = st.session_state.inbox_next_page_token
         if not page_token:
-            st.info("✅ All inbox pages have already been analyzed.")
+            st.info("? All inbox pages have already been analyzed.")
         else:
             batch, next_page_token = fetch_emails_page(
                 service,
@@ -1058,7 +1058,7 @@ if st.button("🚀 Analyze Next 30", key="main_analyze_next_30", type="primary",
 
             st.session_state.inbox_next_page_token = next_page_token
             if not next_page_token:
-                st.info("✅ Inbox analysis is complete. No more pages left.")
+                st.info("? Inbox analysis is complete. No more pages left.")
             st.rerun()
     except Exception as e:
         st.error(f"Analyze Next 30 failed: {e}")
@@ -1079,7 +1079,7 @@ col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.markdown(f"""
     <div class="info-card">
-        <div class="big-number">📨 {len(all_emails)}</div>
+        <div class="big-number">?? {len(all_emails)}</div>
         <div class="center-text">Total Emails</div>
     </div>
     """, unsafe_allow_html=True)
@@ -1087,7 +1087,7 @@ with col1:
 with col2:
     st.markdown(f"""
     <div class="spam-card">
-        <div class="big-number">🚫 {len(spam_emails)}</div>
+        <div class="big-number">?? {len(spam_emails)}</div>
         <div class="center-text">Spam Detected</div>
     </div>
     """, unsafe_allow_html=True)
@@ -1095,7 +1095,7 @@ with col2:
 with col3:
     st.markdown(f"""
     <div class="ham-card">
-        <div class="big-number">✅ {len(safe_emails)}</div>
+        <div class="big-number">? {len(safe_emails)}</div>
         <div class="center-text">Safe Emails</div>
     </div>
     """, unsafe_allow_html=True)
@@ -1103,7 +1103,7 @@ with col3:
 with col4:
     st.markdown(f"""
     <div class="alert-card">
-        <div class="big-number">📩 {len(unread_emails)}</div>
+        <div class="big-number">?? {len(unread_emails)}</div>
         <div class="center-text">Unread</div>
     </div>
     """, unsafe_allow_html=True)
@@ -1185,12 +1185,12 @@ if st.session_state.new_alerts:
 # ============================================================
 st.markdown("---")
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📥 All Emails",
-    "🚫 Spam Emails",
-    "✅ Safe Emails",
-    "🗂️ Categories",
-    "🔑 Keywords",
-    "📊 Analytics"
+    "?? All Emails",
+    "?? Spam Emails",
+    "? Safe Emails",
+    "??? Categories",
+    "?? Keywords",
+    "?? Analytics"
 ])
 
 
@@ -1490,22 +1490,22 @@ with tab6:
 # SIDEBAR: CONTROLS
 # ============================================================
 with st.sidebar:
-    st.header("👤 Account")
+    st.header("?? Account")
     st.markdown(f"**{profile.get('email', '')}**")
     st.markdown(f"Total messages: {profile.get('total_messages', 'N/A')}")
 
     st.markdown(
-        f"<div style='font-weight:700; color:#1f4ed8; margin:8px 0 4px 0;'>📊 Analyzed so far: {len(st.session_state.classified_emails)}</div>",
+        f"<div style='font-weight:700; color:#1f4ed8; margin:8px 0 4px 0;'>?? Analyzed so far: {len(st.session_state.classified_emails)}</div>",
         unsafe_allow_html=True,
     )
     st.markdown(
-        f"<div style='font-weight:700; color:#15803d; margin:0 0 8px 0;'>📬 Approx remaining: {approx_remaining}</div>",
+        f"<div style='font-weight:700; color:#15803d; margin:0 0 8px 0;'>?? Approx remaining: {approx_remaining}</div>",
         unsafe_allow_html=True,
     )
 
     st.divider()
 
-    st.header("📡 Real-time Monitor")
+    st.header("?? Real-time Monitor")
     st.session_state.auto_refresh = st.toggle(
         "Auto-check new emails",
         value=st.session_state.auto_refresh,
@@ -1543,7 +1543,7 @@ with st.sidebar:
     st.divider()
 
     # Keyword management shortcut in sidebar
-    st.header("🔑 Keywords")
+    st.header("?? Keywords")
     if st.session_state.user_keywords:
         kw_sidebar_html = ""
         for kw in st.session_state.user_keywords:
@@ -1568,7 +1568,7 @@ with st.sidebar:
     st.divider()
 
     # Report schedule status
-    st.header("🗓️ Scheduled Reports")
+    st.header("??? Scheduled Reports")
 
     freq_options = ['Off', 'Daily', 'Weekly', 'Monthly']
     current_freq = st.session_state.report_settings.get('frequency', 'Off')
@@ -1663,7 +1663,7 @@ with st.sidebar:
     st.divider()
 
     # Manual quick test
-    st.header("🧪 Quick Test")
+    st.header("?? Quick Test")
     test_text = st.text_area(
         "Test any text:", height=80,
         placeholder="Paste any email text to classify..."
@@ -1682,3 +1682,4 @@ with st.sidebar:
                 cat_name = cat_map.get(cat, cat.title())
                 st.success(f"NOT SPAM ({conf[0] * 100:.1f}%)")
                 st.info(f"Category: {cat_name}")
+
