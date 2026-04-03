@@ -108,14 +108,18 @@ def load_oauth_client_config():
 
 def build_oauth_flow(client_config):
     """Create an OAuth flow from either installed or web client config."""
-    flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
+    try:
+        flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
 
-    web_config = client_config.get('web', {})
-    redirect_uris = web_config.get('redirect_uris', [])
-    if redirect_uris:
-        flow.redirect_uri = redirect_uris[0]
+        web_config = client_config.get('web', {})
+        redirect_uris = web_config.get('redirect_uris', [])
+        if redirect_uris:
+            flow.redirect_uri = redirect_uris[0]
 
-    return flow
+        return flow
+    except Exception as e:
+        st.error(f"OAuth flow setup failed: {str(e)}")
+        return None
 
 # ===================== CONFIGURATION =====================
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
@@ -448,22 +452,31 @@ def handle_web_oauth_return(client_config):
         st.error('OAuth state mismatch. Please click Connect Gmail again.')
         return None
 
-    flow = build_oauth_flow(client_config)
-    flow.fetch_token(code=code)
-    creds = flow.credentials
-
-    with open(TOKEN_FILE, 'wb') as f:
-        pickle.dump(creds, f)
-
     try:
-        st.query_params.clear()
-    except Exception:
-        pass
+        flow = build_oauth_flow(client_config)
+        if not flow:
+            st.error('Failed to create OAuth flow.')
+            return None
 
-    st.session_state.pop('oauth_state', None)
-    st.session_state.pop('oauth_auth_url', None)
+        flow.fetch_token(code=code)
+        creds = flow.credentials
 
-    return build('gmail', 'v1', credentials=creds)
+        with open(TOKEN_FILE, 'wb') as f:
+            pickle.dump(creds, f)
+
+        try:
+            st.query_params.clear()
+        except Exception:
+            pass
+
+        st.session_state.pop('oauth_state', None)
+        st.session_state.pop('oauth_auth_url', None)
+
+        service = build('gmail', 'v1', credentials=creds)
+        return service
+    except Exception as e:
+        st.error(f'OAuth token exchange failed: {str(e)}')
+        return None
 
 
 def run_oauth_flow():
@@ -473,6 +486,8 @@ def run_oauth_flow():
         raise FileNotFoundError('No Gmail OAuth client config found in secrets or credentials.json.')
 
     flow = build_oauth_flow(client_config)
+    if not flow:
+        raise RuntimeError('Failed to create OAuth flow object.')
 
     if 'installed' in client_config:
         try:
