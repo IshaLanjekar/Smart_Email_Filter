@@ -503,11 +503,8 @@ def run_oauth_flow():
         )
         st.session_state['oauth_state'] = state
         st.session_state['oauth_auth_url'] = auth_url
-        components.html(
-            f"<script>window.location.href = {json.dumps(auth_url)};</script>",
-            height=0,
-        )
-        st.stop()
+        st.markdown("### Click the button below to authorize Gmail access:")
+        st.link_button("🔐 Click here to Sign in with Google", auth_url)
 
     with open(TOKEN_FILE, 'wb') as f:
         pickle.dump(creds, f)
