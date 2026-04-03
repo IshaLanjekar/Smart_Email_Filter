@@ -984,6 +984,19 @@ profile = st.session_state.profile
 last_time = st.session_state.last_check
 last_str = last_time.strftime('%I:%M:%S %p') if last_time else 'N/A'
 
+# If auth succeeded but profile is empty, fetch it once to avoid showing "****".
+if st.session_state.gmail_connected and not profile.get('email'):
+    try:
+        refreshed_profile = get_user_profile(st.session_state.service)
+        st.session_state.profile = refreshed_profile
+        profile = refreshed_profile
+    except Exception:
+        st.session_state.profile = {
+            'email': 'Connected (account hidden)',
+            'total_messages': profile.get('total_messages', 0),
+        }
+        profile = st.session_state.profile
+
 hdr_left, hdr_right = st.columns([5, 1])
 with hdr_left:
     st.markdown("# 📧 Gmail Spam Detector")
