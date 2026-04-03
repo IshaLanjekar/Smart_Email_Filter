@@ -1,5 +1,6 @@
 import streamlit as st
 import streamlit.components.v1 as components
+from streamlit_oauth import oauth
 import pickle
 import re
 import os
@@ -105,21 +106,6 @@ def load_oauth_client_config():
 
     return None
 
-
-def build_oauth_flow(client_config):
-    """Create an OAuth flow from either installed or web client config."""
-    try:
-        flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
-
-        web_config = client_config.get('web', {})
-        redirect_uris = web_config.get('redirect_uris', [])
-        if redirect_uris:
-            flow.redirect_uri = redirect_uris[0]
-
-        return flow
-    except Exception as e:
-        st.error(f"OAuth flow setup failed: {str(e)}")
-        return None
 
 # ===================== CONFIGURATION =====================
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
@@ -439,76 +425,41 @@ def get_gmail_service_silent():
     return None
 
 
-def handle_web_oauth_return(client_config):
-    """Complete a web OAuth callback if Google has redirected back to the app."""
-    code = st.query_params.get('code')
-    state = st.query_params.get('state')
-    pending_state = st.session_state.get('oauth_state')
-
-    if not code or not state or not pending_state:
-        return None
-
-    if state != pending_state:
-        st.error('OAuth state mismatch. Please click Connect Gmail again.')
-        return None
-
-    try:
-        flow = build_oauth_flow(client_config)
-        if not flow:
-            st.error('Failed to create OAuth flow.')
-            return None
-
-        flow.fetch_token(code=code)
-        creds = flow.credentials
-
-        with open(TOKEN_FILE, 'wb') as f:
-            pickle.dump(creds, f)
-
-        try:
-            st.query_params.clear()
-        except Exception:
-            pass
-
-        st.session_state.pop('oauth_state', None)
-        st.session_state.pop('oauth_auth_url', None)
-
-        service = build('gmail', 'v1', credentials=creds)
-        return service
-    except Exception as e:
-        st.error(f'OAuth token exchange failed: {str(e)}')
-        return None
-
 
 def run_oauth_flow():
-    """Full OAuth flow for local desktop login."""
+    """OAuth flow using streamlit-oauth library."""
     client_config = load_oauth_client_config()
     if not client_config:
         raise FileNotFoundError('No Gmail OAuth client config found in secrets or credentials.json.')
 
-    flow = build_oauth_flow(client_config)
-    if not flow:
-        raise RuntimeError('Failed to create OAuth flow object.')
-
-    if 'installed' in client_config:
-        try:
-            creds = flow.run_local_server(port=OAUTH_PORT)
-        except OSError:
-            # Fallback to any free local port if the preferred one is unavailable.
-            creds = flow.run_local_server(port=0)
-    else:
-        auth_url, state = flow.authorization_url(
-            access_type='offline',
-            prompt='consent',
-            include_granted_scopes='true',
+    # Use streamlit-oauth for reliable OAuth on Streamlit Cloud
+    token = oauth(
+        name="Google",
+        authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+        token_url="https://oauth2.googleapis.com/token",
+        client_id=client_config.get('web', {}).get('client_id'),
+        client_secret=client_config.get('web', {}).get('client_secret'),
+        scopes=['openid', 'email', 'profile', 'https://www.googleapis.com/auth/gmail.readonly'],
+        redirect_uri=client_config.get('web', {}).get('redirect_uris', ['http://localhost'])[0],
+    )
+    
+    if token:
+        # Use token to build Gmail service
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+        
+        creds = Credentials(
+            token=token['access_token'],
+            refresh_token=token.get('refresh_token'),
+            token_uri='https://oauth2.googleapis.com/token',
+            client_id=client_config.get('web', {}).get('client_id'),
+            client_secret=client_config.get('web', {}).get('client_secret'),
         )
-        st.session_state['oauth_state'] = state
-        st.session_state['oauth_auth_url'] = auth_url
-        st.markdown("### Click the button below to authorize Gmail access:")
-        st.link_button("🔐 Click here to Sign in with Google", auth_url)
-
-    with open(TOKEN_FILE, 'wb') as f:
-        pickle.dump(creds, f)
-    return build('gmail', 'v1', credentials=creds)
+        
+        service = build('gmail', 'v1', credentials=creds)
+        return service
+    
+    return None
 
 
 # ============================================================
@@ -663,13 +614,6 @@ oauth_client_config = load_oauth_client_config()
 if not st.session_state.gmail_connected:
     st.title("Gmail Spam Detector")
     st.markdown("---")
-    
-    # DEBUG: Show what's happening
-    with st.expander("DEBUG: OAuth Status"):
-        st.write(f"Config loaded: {oauth_client_config is not None}")
-        st.write(f"Is web config: {'web' in oauth_client_config if oauth_client_config else False}")
-        st.write(f"Query params: {dict(st.query_params)}")
-        st.write(f"OAuth state in session: {st.session_state.get('oauth_state', 'NOT SET')}")
 
     # Try silent connection first
     service = get_gmail_service_silent()
@@ -681,46 +625,16 @@ if not st.session_state.gmail_connected:
         except Exception:
             st.session_state.profile = {'email': 'Connected', 'total_messages': 0}
         st.rerun()
-    elif oauth_client_config and 'web' in oauth_client_config:
-        service = handle_web_oauth_return(oauth_client_config)
-        if service:
-            st.session_state.service = service
-            st.session_state.gmail_connected = True
-            try:
-                st.session_state.profile = get_user_profile(service)
-            except Exception:
-                st.session_state.profile = {'email': 'Connected', 'total_messages': 0}
-            st.rerun()
     else:
         # No valid token - user must click to authenticate
         st.markdown("### Connect Your Gmail Account")
         st.markdown(
             "Click the button below to securely connect your Gmail. "
-            "A Google login page will open in your browser."
+            "You will be redirected to Google login."
         )
-        if oauth_client_config and 'web' in oauth_client_config:
-            st.info(
-                "Deploy mode detected. Gmail will use the Web OAuth client from Streamlit Secrets."
-            )
-        else:
-            st.warning(
-                "Make sure **credentials.json** is in the project folder "
-                "and your email is added as a **test user** in Google Cloud Console."
-            )
-
-        auth_error = st.session_state.pop('auth_error', None)
-        if auth_error:
-            msg = str(auth_error)
-            if 'deleted_client' in msg:
-                st.error(
-                    "Your previous Gmail token is linked to a deleted OAuth client. "
-                    "Please click **Connect Gmail** to authorize again with current credentials."
-                )
-            else:
-                st.error(f"Previous auth token was invalid and has been reset: {msg}")
 
         if st.button("Connect Gmail", type="primary", width='stretch'):
-            with st.spinner("Opening Google login in your browser..."):
+            with st.spinner("Connecting to Gmail..."):
                 try:
                     service = run_oauth_flow()
                     if service:
@@ -728,17 +642,10 @@ if not st.session_state.gmail_connected:
                         st.session_state.gmail_connected = True
                         st.session_state.profile = get_user_profile(service)
                         st.rerun()
-                except Exception as e:
-                    msg = str(e)
-                    if 'deleted_client' in msg:
-                        st.error(
-                            "OAuth client appears deleted in Google Cloud. "
-                            "Download a fresh OAuth client JSON and try again."
-                        )
                     else:
-                        st.error(f"Connection failed: {e}")
-
-        st.stop()  # Don't render rest of page until connected
+                        st.error("Gmail connection cancelled. Please try again.")
+                except Exception as e:
+                    st.error(f"Connection failed: {e}")
 
 
 # ============================================================
