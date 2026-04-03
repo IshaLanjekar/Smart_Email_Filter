@@ -1,6 +1,5 @@
 import streamlit as st
 import streamlit.components.v1 as components
-from streamlit_oauth import oauth
 import pickle
 import re
 import os
@@ -12,6 +11,7 @@ from datetime import datetime, timedelta
 from nltk.corpus import stopwords
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 nltk.download('stopwords', quiet=True)
@@ -427,37 +427,83 @@ def get_gmail_service_silent():
 
 
 def run_oauth_flow():
-    """OAuth flow using streamlit-oauth library."""
+    """OAuth flow for Streamlit Cloud - manual code exchange."""
     client_config = load_oauth_client_config()
     if not client_config:
         raise FileNotFoundError('No Gmail OAuth client config found in secrets or credentials.json.')
 
-    # Use streamlit-oauth for reliable OAuth on Streamlit Cloud
-    token = oauth(
-        name="Google",
-        authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
-        token_url="https://oauth2.googleapis.com/token",
-        client_id=client_config.get('web', {}).get('client_id'),
-        client_secret=client_config.get('web', {}).get('client_secret'),
-        scopes=['openid', 'email', 'profile', 'https://www.googleapis.com/auth/gmail.readonly'],
-        redirect_uri=client_config.get('web', {}).get('redirect_uris', ['http://localhost'])[0],
+    web_config = client_config.get('web', {})
+    client_id = web_config.get('client_id')
+    client_secret = web_config.get('client_secret')
+    redirect_uri = web_config.get('redirect_uris', ['http://localhost'])[0]
+    
+    if not client_id or not client_secret:
+        raise ValueError('Missing client_id or client_secret in OAuth config')
+    
+    # Build manual authorization URL
+    auth_url = (
+        f"https://accounts.google.com/o/oauth2/v2/auth?"
+        f"client_id={client_id}&"
+        f"redirect_uri={redirect_uri}&"
+        f"response_type=code&"
+        f"scope=https://www.googleapis.com/auth/gmail.readonly&"
+        f"access_type=offline&"
+        f"prompt=consent"
     )
     
-    if token:
-        # Use token to build Gmail service
-        from google.auth.transport.requests import Request
-        from google.oauth2.credentials import Credentials
-        
-        creds = Credentials(
-            token=token['access_token'],
-            refresh_token=token.get('refresh_token'),
-            token_uri='https://oauth2.googleapis.com/token',
-            client_id=client_config.get('web', {}).get('client_id'),
-            client_secret=client_config.get('web', {}).get('client_secret'),
-        )
-        
-        service = build('gmail', 'v1', credentials=creds)
-        return service
+    st.markdown("### Step 1: Click to Sign in with Google")
+    st.link_button("🔐 Sign in with Google", auth_url, use_container_width=True)
+    
+    st.markdown("### Step 2: Copy the authorization code")
+    st.info(
+        "After signing in, Google will redirect to a URL ending with `code=XXXXXX`. "
+        "Copy the code (everything after `code=`) and paste it below."
+    )
+    
+    auth_code = st.text_input("Paste authorization code here:")
+    
+    if auth_code:
+        with st.spinner("Exchanging code for token..."):
+            try:
+                # Exchange code for token
+                token_url = "https://oauth2.googleapis.com/token"
+                token_data = {
+                    'code': auth_code,
+                    'client_id': client_id,
+                    'client_secret': client_secret,
+                    'redirect_uri': redirect_uri,
+                    'grant_type': 'authorization_code',
+                }
+                
+                import requests
+                response = requests.post(token_url, data=token_data)
+                response.raise_for_status()
+                
+                token_response = response.json()
+                access_token = token_response.get('access_token')
+                refresh_token = token_response.get('refresh_token')
+                
+                if not access_token:
+                    st.error(f"Token exchange failed: {token_response}")
+                    return None
+                
+                # Create credentials
+                creds = Credentials(
+                    token=access_token,
+                    refresh_token=refresh_token,
+                    token_uri='https://oauth2.googleapis.com/token',
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    scopes=['https://www.googleapis.com/auth/gmail.readonly'],
+                )
+                
+                service = build('gmail', 'v1', credentials=creds)
+                st.success("✅ Gmail connected successfully!")
+                return service
+                
+            except Exception as e:
+                st.error(f"Failed to exchange code: {str(e)}")
+                return None
     
     return None
 
