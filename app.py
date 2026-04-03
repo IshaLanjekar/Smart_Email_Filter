@@ -477,14 +477,18 @@ def run_oauth_flow():
                 
                 import requests
                 response = requests.post(token_url, data=token_data)
-                response.raise_for_status()
+                
+                if response.status_code != 200:
+                    st.error(f"❌ Google rejected the code. Status: {response.status_code}")
+                    st.error(f"Response: {response.text}")
+                    return None
                 
                 token_response = response.json()
                 access_token = token_response.get('access_token')
                 refresh_token = token_response.get('refresh_token')
                 
                 if not access_token:
-                    st.error(f"Token exchange failed: {token_response}")
+                    st.error(f"❌ No access token received: {token_response}")
                     return None
                 
                 # Create credentials
@@ -502,7 +506,9 @@ def run_oauth_flow():
                 return service
                 
             except Exception as e:
-                st.error(f"Failed to exchange code: {str(e)}")
+                st.error(f"❌ OAuth Error: {str(e)}")
+                import traceback
+                st.error(f"Details: {traceback.format_exc()}")
                 return None
     
     return None
