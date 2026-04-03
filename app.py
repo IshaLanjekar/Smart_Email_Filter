@@ -714,8 +714,7 @@ if not st.session_state.gmail_connected:
         # No valid token - user must click to authenticate
         st.markdown("### Connect Your Gmail Account")
         st.markdown(
-            "Click the button below to securely connect your Gmail. "
-            "You will be redirected to Google login."
+            "Click the button to sign in with Google and get an authorization code."
         )
 
         client_config = load_oauth_client_config()
@@ -725,34 +724,35 @@ if not st.session_state.gmail_connected:
             web_config = client_config.get('web', {})
             client_id = web_config.get('client_id')
             client_secret = web_config.get('client_secret')
-            redirect_uri = web_config.get('redirect_uris', ['http://localhost'])[0]
             
             if not client_id or not client_secret:
                 st.error("❌ Missing OAuth credentials in configuration")
             else:
-                # Build manual authorization URL
+                # Use "out-of-band" mode - Google shows code on a page you can copy
+                # This works better than localhost redirect for Streamlit Cloud
                 auth_url = (
                     f"https://accounts.google.com/o/oauth2/v2/auth?"
                     f"client_id={client_id}&"
-                    f"redirect_uri={redirect_uri}&"
+                    f"redirect_uri=urn:ietf:wg:oauth:2.0:oob&"
                     f"response_type=code&"
                     f"scope=https://www.googleapis.com/auth/gmail.readonly&"
                     f"access_type=offline&"
                     f"prompt=consent"
                 )
                 
-                st.markdown("#### Step 1: Sign in with Google")
-                st.link_button("🔐 Sign in with Google", auth_url, use_container_width=True)
+                st.markdown("#### Step 1: Click to Sign in")
+                st.link_button("🔐 Sign in with Google OAuth", auth_url, use_container_width=True)
                 
-                st.markdown("#### Step 2: Copy & Paste Authorization Code")
+                st.markdown("#### Step 2: Copy the Authorization Code")
                 st.info(
-                    "After signing in, Google redirects to a URL ending with `code=XXXXXX`. "
-                    "Copy everything after `code=` and paste it below."
+                    "✅ After signing in, Google will show a page with an **authorization code**. "
+                    "Copy that code and paste it below."
                 )
                 
                 auth_code = st.text_input(
-                    "Paste authorization code here:",
+                    "🔑 Paste your authorization code:",
                     key="oauth_code_input",
+                    placeholder="e.g., 4/0AfdR...",
                 )
                 
                 if auth_code:
@@ -764,7 +764,7 @@ if not st.session_state.gmail_connected:
                                 'code': auth_code,
                                 'client_id': client_id,
                                 'client_secret': client_secret,
-                                'redirect_uri': redirect_uri,
+                                'redirect_uri': 'urn:ietf:wg:oauth:2.0:oob',  # Must match auth request
                                 'grant_type': 'authorization_code',
                             }
                             
