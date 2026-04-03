@@ -501,6 +501,14 @@ def run_oauth_flow():
                     scopes=['https://www.googleapis.com/auth/gmail.readonly'],
                 )
                 
+                # ✅ SAVE CREDENTIALS FOR NEXT TIME
+                try:
+                    with open(TOKEN_FILE, 'wb') as f:
+                        pickle.dump(creds, f)
+                    st.success("✅ Credentials saved! Creating service...")
+                except Exception as save_err:
+                    st.warning(f"⚠️ Could not save credentials to disk: {save_err}")
+                
                 service = build('gmail', 'v1', credentials=creds)
                 st.success("✅ Gmail connected successfully!")
                 return service
@@ -710,19 +718,100 @@ if not st.session_state.gmail_connected:
             "You will be redirected to Google login."
         )
 
-        if st.button("Connect Gmail", type="primary", width='stretch'):
-            with st.spinner("Connecting to Gmail..."):
-                try:
-                    service = run_oauth_flow()
-                    if service:
-                        st.session_state.service = service
-                        st.session_state.gmail_connected = True
-                        st.session_state.profile = get_user_profile(service)
-                        st.rerun()
-                    else:
-                        st.error("Gmail connection cancelled. Please try again.")
-                except Exception as e:
-                    st.error(f"Connection failed: {e}")
+        client_config = load_oauth_client_config()
+        if not client_config:
+            st.error("❌ Could not load OAuth configuration")
+        else:
+            web_config = client_config.get('web', {})
+            client_id = web_config.get('client_id')
+            client_secret = web_config.get('client_secret')
+            redirect_uri = web_config.get('redirect_uris', ['http://localhost'])[0]
+            
+            if not client_id or not client_secret:
+                st.error("❌ Missing OAuth credentials in configuration")
+            else:
+                # Build manual authorization URL
+                auth_url = (
+                    f"https://accounts.google.com/o/oauth2/v2/auth?"
+                    f"client_id={client_id}&"
+                    f"redirect_uri={redirect_uri}&"
+                    f"response_type=code&"
+                    f"scope=https://www.googleapis.com/auth/gmail.readonly&"
+                    f"access_type=offline&"
+                    f"prompt=consent"
+                )
+                
+                st.markdown("#### Step 1: Sign in with Google")
+                st.link_button("🔐 Sign in with Google", auth_url, use_container_width=True)
+                
+                st.markdown("#### Step 2: Copy & Paste Authorization Code")
+                st.info(
+                    "After signing in, Google redirects to a URL ending with `code=XXXXXX`. "
+                    "Copy everything after `code=` and paste it below."
+                )
+                
+                auth_code = st.text_input(
+                    "Paste authorization code here:",
+                    key="oauth_code_input",
+                )
+                
+                if auth_code:
+                    with st.spinner("🔄 Exchanging code for token..."):
+                        try:
+                            # Exchange code for token
+                            token_url = "https://oauth2.googleapis.com/token"
+                            token_data = {
+                                'code': auth_code,
+                                'client_id': client_id,
+                                'client_secret': client_secret,
+                                'redirect_uri': redirect_uri,
+                                'grant_type': 'authorization_code',
+                            }
+                            
+                            import requests
+                            response = requests.post(token_url, data=token_data)
+                            
+                            if response.status_code != 200:
+                                st.error(f"❌ Google rejected the code. Status: {response.status_code}")
+                                st.error(f"Response: {response.text}")
+                            else:
+                                token_response = response.json()
+                                access_token = token_response.get('access_token')
+                                refresh_token = token_response.get('refresh_token')
+                                
+                                if not access_token:
+                                    st.error(f"❌ No access token received: {token_response}")
+                                else:
+                                    # Create credentials
+                                    creds = Credentials(
+                                        token=access_token,
+                                        refresh_token=refresh_token,
+                                        token_uri='https://oauth2.googleapis.com/token',
+                                        client_id=client_id,
+                                        client_secret=client_secret,
+                                        scopes=['https://www.googleapis.com/auth/gmail.readonly'],
+                                    )
+                                    
+                                    # ✅ SAVE CREDENTIALS
+                                    try:
+                                        with open(TOKEN_FILE, 'wb') as f:
+                                            pickle.dump(creds, f)
+                                        st.success("✅ Credentials saved!")
+                                    except Exception as save_err:
+                                        st.warning(f"⚠️ Could not save credentials: {save_err}")
+                                    
+                                    try:
+                                        service = build('gmail', 'v1', credentials=creds)
+                                        st.success("✅ Gmail connected successfully!")
+                                        st.session_state.service = service
+                                        st.session_state.gmail_connected = True
+                                        st.session_state.profile = get_user_profile(service)
+                                        st.balloons()
+                                        st.rerun()
+                                    except Exception as service_err:
+                                        st.error(f"❌ Failed to create Gmail service: {service_err}")
+                        except Exception as e:
+                            st.error(f"❌ OAuth Error: {type(e).__name__}: {str(e)}")
 
 
 # ============================================================
