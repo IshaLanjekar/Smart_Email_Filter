@@ -1,29 +1,19 @@
-import streamlit as st
+﻿import streamlit as st
+import streamlit.components.v1 as components
 import pickle
 import re
 import os
 import json
 import base64
 import pandas as pd
+import nltk
 from datetime import datetime, timedelta
-from urllib.parse import parse_qs, urlparse
+from nltk.corpus import stopwords
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-try:
-    import nltk
-    from nltk.corpus import stopwords
-    nltk.download('stopwords', quiet=True)
-    _stop_words = set(stopwords.words('english'))
-except Exception:
-    nltk = None
-    _stop_words = {
-        'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'had',
-        'has', 'have', 'he', 'her', 'his', 'i', 'in', 'is', 'it', 'its', 'me',
-        'my', 'not', 'of', 'on', 'or', 'our', 'she', 'so', 'that', 'the', 'their',
-        'them', 'they', 'this', 'to', 'was', 'we', 'were', 'with', 'you', 'your'
-    }
+nltk.download('stopwords', quiet=True)
 
 # ===================== PERSISTENCE FILES =====================
 KEYWORDS_FILE = 'user_keywords.json'
@@ -81,57 +71,63 @@ def save_report_settings(settings):
     with open('report_settings.json', 'w') as f:
         json.dump(settings, f)
 
+
+def load_oauth_client_config():
+    """Load Gmail OAuth client config from Streamlit secrets or local JSON."""
+    # Try secrets path 1: [gmail].client_config (recommended)
+    try:
+        gmail_section = st.secrets.get('gmail', {})
+        if gmail_section and hasattr(gmail_section, 'get'):
+            raw_config = gmail_section.get('client_config')
+            if raw_config:
+                if isinstance(raw_config, str):
+                    parsed = json.loads(raw_config)
+                    return parsed
+                elif hasattr(raw_config, 'get'):
+                    return dict(raw_config)
+    except Exception:
+        pass
+
+    # Try secrets path 2: top-level client_config (backup)
+    try:
+        raw_config = st.secrets.get('client_config')
+        if raw_config:
+            if isinstance(raw_config, str):
+                return json.loads(raw_config)
+            elif hasattr(raw_config, 'get'):
+                return dict(raw_config)
+    except Exception:
+        pass
+
+    if os.path.exists(CREDS_FILE):
+        with open(CREDS_FILE, 'r') as f:
+            return json.load(f)
+
+    return None
+
+
+def build_oauth_flow(client_config):
+    """Create an OAuth flow from either installed or web client config."""
+    flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
+
+    web_config = client_config.get('web', {})
+    redirect_uris = web_config.get('redirect_uris', [])
+    if redirect_uris:
+        flow.redirect_uri = redirect_uris[0]
+
+    return flow
+
 # ===================== CONFIGURATION =====================
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 TOKEN_FILE = 'token.pickle'
 CREDS_FILE = 'credentials.json'
-OAUTH_PORT = 8090  # Fixed port — won't conflict with Streamlit (8501)
+OAUTH_PORT = 8090  # Fixed port - won't conflict with Streamlit (8501)
 AUTO_REFRESH_SECONDS = 30
-
-
-def load_oauth_client_config():
-    """Load Google OAuth client config from file or Streamlit secrets."""
-    if os.path.exists(CREDS_FILE):
-        with open(CREDS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-
-    # Streamlit Cloud path: support common secret formats.
-    def _normalize_client_config(value):
-        if not value:
-            return None
-        if isinstance(value, str):
-            value = json.loads(value)
-        if isinstance(value, dict) and ('installed' in value or 'web' in value):
-            return value
-        return None
-
-    try:
-        secret_sources = [
-            st.secrets.get('gmail', {}).get('client_secret'),
-            st.secrets.get('gmail', {}).get('client_config'),
-            st.secrets.get('client_secret'),
-            st.secrets.get('client_config'),
-            dict(st.secrets) if ('installed' in st.secrets or 'web' in st.secrets) else None,
-        ]
-
-        for source in secret_sources:
-            config = _normalize_client_config(source)
-            if config:
-                return config
-    except Exception:
-        pass
-
-    raise FileNotFoundError(
-        "Google OAuth client config not found. Add credentials.json locally "
-        "or set one of these in Streamlit secrets: [gmail].client_secret, "
-        "[gmail].client_config, client_secret, client_config, or paste full "
-        "OAuth JSON at top level."
-    )
 
 # ===================== PAGE CONFIG =====================
 st.set_page_config(
     page_title="Gmail Spam Detector",
-    page_icon="📧",
+    page_icon="G",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -139,6 +135,57 @@ st.set_page_config(
 # ===================== CUSTOM CSS =====================
 st.markdown("""
 <style>
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #ffffff 0%, #f3f8ff 100%);
+        border-right: 1px solid #cddcff;
+    }
+    [data-testid="stSidebar"] h2 {
+        color: #1f3a8a;
+        letter-spacing: 0.2px;
+    }
+    button[kind="primary"] {
+        background: linear-gradient(90deg, #ff4d6d 0%, #e63946 100%) !important;
+        border: none !important;
+        color: #ffffff !important;
+        font-weight: 600 !important;
+        box-shadow: 0 6px 16px rgba(230, 57, 70, 0.25);
+    }
+    .analyze-cta {
+        background: linear-gradient(135deg, #fff4e6 0%, #ffe3c2 100%);
+        border-left: 6px solid #ff7b00;
+        padding: 14px 16px;
+        border-radius: 10px;
+        margin: 10px 0 12px 0;
+    }
+    .analyze-shell {
+        background: linear-gradient(135deg, #fff6ea 0%, #ffe8cc 100%);
+        border: 1px solid #ffd2a8;
+        border-left: 6px solid #ff7b00;
+        border-radius: 12px;
+        padding: 14px 16px;
+        margin: 8px 0 10px 0;
+    }
+    .analyze-chip {
+        background: #eef4ff;
+        border: 1px solid #d4e3ff;
+        border-radius: 12px;
+        padding: 10px 14px;
+        min-height: 88px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+    .analyze-chip .n {
+        font-size: 34px;
+        font-weight: 700;
+        color: #0d3f90;
+        line-height: 1.05;
+    }
+    .analyze-chip .t {
+        font-size: 13px;
+        color: #31589f;
+        margin-top: 4px;
+    }
     .spam-card {
         background-color: #ffe0e0;
         padding: 15px;
@@ -240,39 +287,22 @@ st.markdown("""
 
 
 # ============================================================
-# MODEL LOADING (cached — loads only once)
+# MODEL LOADING (cached - loads only once)
 # ============================================================
 @st.cache_resource
 def load_models():
-    spam_model_path = next(
-        (p for p in ["spam_model.pkl", "email_model.pkl"] if os.path.exists(p)),
-        None,
-    )
-    vectorizer_path = next(
-        (p for p in ["vectorizer_spam.pkl", "vectorizer.pkl"] if os.path.exists(p)),
-        None,
-    )
-    category_model_path = next(
-        (p for p in ["category_model.pkl"] if os.path.exists(p)),
-        None,
-    )
-
-    if not spam_model_path or not vectorizer_path:
-        raise FileNotFoundError(
-            "Required model files not found. Expected one of "
-            "['spam_model.pkl', 'email_model.pkl'] and one of "
-            "['vectorizer_spam.pkl', 'vectorizer.pkl']."
-        )
-
-    spam_model = pickle.load(open(spam_model_path, "rb"))
-    vectorizer = pickle.load(open(vectorizer_path, "rb"))
-    category_model = pickle.load(open(category_model_path, "rb")) if category_model_path else None
+    spam_model = pickle.load(open("spam_model.pkl", "rb"))
+    vectorizer = pickle.load(open("vectorizer_spam.pkl", "rb"))
+    category_model = pickle.load(open("category_model.pkl", "rb"))
     return spam_model, vectorizer, category_model
 
 
 # ============================================================
 # TEXT PREPROCESSING (must match train_model.py)
 # ============================================================
+_stop_words = set(stopwords.words('english'))
+
+
 def clean_text(text):
     text = text.lower()
     text = re.sub(r'[^a-zA-Z]', ' ', text)
@@ -284,7 +314,7 @@ def clean_text(text):
 # ============================================================
 # 3-STAGE EMAIL CLASSIFIER
 # Stage 1: Spam / Not Spam  (ML model)
-# Stage 2: Category          (ML model — Work/Promotional/Academic)
+# Stage 2: Category          (ML model - Work/Promotional/Academic)
 # Stage 3: Sub-category      (keyword rules for finer labels)
 # ============================================================
 def check_keyword_importance(email_data, user_keywords):
@@ -392,52 +422,80 @@ def get_gmail_service_silent():
             with open(TOKEN_FILE, 'wb') as f:
                 pickle.dump(creds, f)
             return build('gmail', 'v1', credentials=creds)
-        except Exception:
+        except Exception as e:
+            # If the OAuth client was changed/deleted, the saved token becomes unusable.
+            if os.path.exists(TOKEN_FILE):
+                try:
+                    os.remove(TOKEN_FILE)
+                except Exception:
+                    pass
+            st.session_state['auth_error'] = str(e)
             return None
 
     return None
 
 
-def run_oauth_flow():
-    """Start OAuth flow and return auth URL for manual completion."""
-    client_config = load_oauth_client_config()
-    flow = InstalledAppFlow.from_client_config(
-        client_config,
-        SCOPES,
-        redirect_uri='http://localhost'
-    )
-    auth_url, _ = flow.authorization_url(
-        access_type='offline',
-        include_granted_scopes='true',
-        prompt='consent'
-    )
-    st.session_state.oauth_flow = flow
-    return auth_url
+def handle_web_oauth_return(client_config):
+    """Complete a web OAuth callback if Google has redirected back to the app."""
+    code = st.query_params.get('code')
+    state = st.query_params.get('state')
+    pending_state = st.session_state.get('oauth_state')
 
+    if not code or not state or not pending_state:
+        return None
 
-def complete_oauth_flow(auth_response_or_code):
-    """Complete OAuth using pasted redirect URL or code."""
-    flow = st.session_state.get('oauth_flow')
-    if not flow:
-        raise RuntimeError("OAuth session expired. Click Connect Gmail again.")
+    if state != pending_state:
+        st.error('OAuth state mismatch. Please click Connect Gmail again.')
+        return None
 
-    raw = (auth_response_or_code or '').strip()
-    if not raw:
-        raise ValueError("Paste the redirected URL or authorization code.")
-
-    code = raw
-    if raw.startswith('http://') or raw.startswith('https://'):
-        parsed = urlparse(raw)
-        code = parse_qs(parsed.query).get('code', [None])[0]
-
-    if not code:
-        raise ValueError("Could not find authorization code in the pasted value.")
-
+    flow = build_oauth_flow(client_config)
     flow.fetch_token(code=code)
     creds = flow.credentials
+
     with open(TOKEN_FILE, 'wb') as f:
         pickle.dump(creds, f)
-    st.session_state.pop('oauth_flow', None)
+
+    try:
+        st.query_params.clear()
+    except Exception:
+        pass
+
+    st.session_state.pop('oauth_state', None)
+    st.session_state.pop('oauth_auth_url', None)
+
+    return build('gmail', 'v1', credentials=creds)
+
+
+def run_oauth_flow():
+    """Full OAuth flow for local desktop login."""
+    client_config = load_oauth_client_config()
+    if not client_config:
+        raise FileNotFoundError('No Gmail OAuth client config found in secrets or credentials.json.')
+
+    flow = build_oauth_flow(client_config)
+
+    if 'installed' in client_config:
+        try:
+            creds = flow.run_local_server(port=OAUTH_PORT)
+        except OSError:
+            # Fallback to any free local port if the preferred one is unavailable.
+            creds = flow.run_local_server(port=0)
+    else:
+        auth_url, state = flow.authorization_url(
+            access_type='offline',
+            prompt='consent',
+            include_granted_scopes='true',
+        )
+        st.session_state['oauth_state'] = state
+        st.session_state['oauth_auth_url'] = auth_url
+        components.html(
+            f"<script>window.location.href = {json.dumps(auth_url)};</script>",
+            height=0,
+        )
+        st.stop()
+
+    with open(TOKEN_FILE, 'wb') as f:
+        pickle.dump(creds, f)
     return build('gmail', 'v1', credentials=creds)
 
 
@@ -489,12 +547,19 @@ def _parse_email_message(service, msg_id):
     }
 
 
-def fetch_emails(service, max_results=50):
-    """Fetch inbox emails."""
-    results = service.users().messages().list(
-        userId='me', maxResults=max_results, labelIds=['INBOX']
-    ).execute()
+def fetch_emails_page(service, max_results=50, page_token=None):
+    """Fetch one inbox page and return (emails, next_page_token)."""
+    params = {
+        'userId': 'me',
+        'maxResults': max_results,
+        'labelIds': ['INBOX'],
+    }
+    if page_token:
+        params['pageToken'] = page_token
+
+    results = service.users().messages().list(**params).execute()
     messages = results.get('messages', [])
+    next_page_token = results.get('nextPageToken')
 
     emails = []
     for msg in messages:
@@ -502,7 +567,7 @@ def fetch_emails(service, max_results=50):
             emails.append(_parse_email_message(service, msg['id']))
         except Exception:
             continue
-    return emails
+    return emails, next_page_token
 
 
 def fetch_new_emails(service, known_ids, max_results=20):
@@ -535,6 +600,9 @@ _defaults = {
     'last_check': None,
     'auto_refresh': True,
     'emails_loaded': False,
+    'ready_to_fetch': False,
+    'inbox_next_page_token': None,
+    'analyzed_count': 0,
     'user_keywords': load_keywords(),
     'report_settings': load_report_settings(),
     'report_history': load_report_history(),
@@ -545,17 +613,31 @@ for _key, _val in _defaults.items():
         st.session_state[_key] = _val
 
 
+def disconnect_gmail_session():
+    """Clear auth/session state and disconnect current Gmail account."""
+    st.session_state.gmail_connected = False
+    st.session_state.service = None
+    st.session_state.ready_to_fetch = False
+    st.session_state.emails_loaded = False
+    st.session_state.classified_emails = []
+    st.session_state.new_alerts = []
+    st.session_state.inbox_next_page_token = None
+    st.session_state.analyzed_count = 0
+    if os.path.exists(TOKEN_FILE):
+        os.remove(TOKEN_FILE)
+
+
 # ============================================================
 # LOAD MODELS
 # ============================================================
 try:
     spam_model, vectorizer, category_model = load_models()
 except FileNotFoundError as e:
-    st.error(f"❌ Model files not found: {e}")
+    st.error(f"Model files not found: {e}")
     st.info("Run `python train_model.py` first to train the models.")
     st.stop()
 except Exception as e:
-    st.error(f"❌ Failed to load models: {e}")
+    st.error(f"Failed to load models: {e}")
     st.stop()
 
 
@@ -564,8 +646,10 @@ except Exception as e:
 #   - Try silent auth from saved token (no popup)
 #   - If no token, show "Connect Gmail" button
 # ============================================================
+oauth_client_config = load_oauth_client_config()
+
 if not st.session_state.gmail_connected:
-    st.title("📧 Gmail Spam Detector")
+    st.title("Gmail Spam Detector")
     st.markdown("---")
 
     # Try silent connection first
@@ -578,68 +662,154 @@ if not st.session_state.gmail_connected:
         except Exception:
             st.session_state.profile = {'email': 'Connected', 'total_messages': 0}
         st.rerun()
+    elif oauth_client_config and 'web' in oauth_client_config:
+        service = handle_web_oauth_return(oauth_client_config)
+        if service:
+            st.session_state.service = service
+            st.session_state.gmail_connected = True
+            try:
+                st.session_state.profile = get_user_profile(service)
+            except Exception:
+                st.session_state.profile = {'email': 'Connected', 'total_messages': 0}
+            st.rerun()
     else:
-        # No valid token — user must click to authenticate
-        st.markdown("### 🔐 Connect Your Gmail Account")
+        # No valid token - user must click to authenticate
+        st.markdown("### Connect Your Gmail Account")
         st.markdown(
             "Click the button below to securely connect your Gmail. "
             "A Google login page will open in your browser."
         )
-        st.warning(
-            "Make sure Google OAuth credentials are configured (credentials.json locally or "
-            "[gmail].client_secret in Streamlit secrets) and your email is added as a "
-            "test user in Google Cloud Console."
-        )
-
-        if st.button("🔐 Connect Gmail", type="primary", width='stretch'):
-            try:
-                auth_url = run_oauth_flow()
-                st.session_state.oauth_auth_url = auth_url
-            except Exception as e:
-                st.error(f"❌ Connection failed: {e}")
-
-        if st.session_state.get('oauth_auth_url'):
-            st.markdown("Step 1: Open Google login")
-            st.markdown(f"[Open Google Login]({st.session_state.oauth_auth_url})")
-            st.caption(
-                "After sign-in, Google redirects to localhost and that page may fail to load. "
-                "Copy the full URL from your browser address bar and paste it below."
+        if oauth_client_config and 'web' in oauth_client_config:
+            st.info(
+                "Deploy mode detected. Gmail will use the Web OAuth client from Streamlit Secrets."
             )
-            oauth_paste = st.text_input(
-                "Step 2: Paste redirected URL or code",
-                key="oauth_paste_value",
-                placeholder="http://localhost/?code=..."
+        else:
+            st.warning(
+                "Make sure **credentials.json** is in the project folder "
+                "and your email is added as a **test user** in Google Cloud Console."
             )
-            if st.button("Complete Gmail Connection", key="onboarding_complete_gmail", width='stretch'):
-                with st.spinner("Completing Google authentication…"):
-                    try:
-                        service = complete_oauth_flow(oauth_paste)
+
+        auth_error = st.session_state.pop('auth_error', None)
+        if auth_error:
+            msg = str(auth_error)
+            if 'deleted_client' in msg:
+                st.error(
+                    "Your previous Gmail token is linked to a deleted OAuth client. "
+                    "Please click **Connect Gmail** to authorize again with current credentials."
+                )
+            else:
+                st.error(f"Previous auth token was invalid and has been reset: {msg}")
+
+        if st.button("Connect Gmail", type="primary", width='stretch'):
+            with st.spinner("Opening Google login in your browser..."):
+                try:
+                    service = run_oauth_flow()
+                    if service:
                         st.session_state.service = service
                         st.session_state.gmail_connected = True
                         st.session_state.profile = get_user_profile(service)
-                        st.session_state.pop('oauth_auth_url', None)
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Connection failed: {e}")
+                except Exception as e:
+                    msg = str(e)
+                    if 'deleted_client' in msg:
+                        st.error(
+                            "OAuth client appears deleted in Google Cloud. "
+                            "Download a fresh OAuth client JSON and try again."
+                        )
+                    else:
+                        st.error(f"Connection failed: {e}")
 
         st.stop()  # Don't render rest of page until connected
 
 
 # ============================================================
-# STEP 2: INITIAL EMAIL FETCH + CLASSIFY
+# STEP 2: KEYWORD SETUP (FIRST PAGE AFTER CONNECT)
 # ============================================================
-if not st.session_state.emails_loaded:
+if not st.session_state.emails_loaded and not st.session_state.ready_to_fetch:
     st.title("📧 Gmail Spam Detector")
     st.markdown(f"Connected to **{st.session_state.profile.get('email', '')}**")
     st.markdown("---")
 
+    st.markdown("### 🔑 Set Your Keywords First")
+    st.markdown(
+        "Before fetching emails, set keywords that are important to you. "
+        "Emails matching these keywords will be marked as Important for easy tracking."
+    )
+    st.info("💡 Examples: your name, project names, company name, meeting, invoice, etc.")
+
+    st.markdown("**Your current keywords:**")
+    current_kws = st.session_state.user_keywords
+    if current_kws:
+        kw_html = ""
+        for kw in current_kws:
+            kw_html += f'<span class="keyword-tag">{kw}</span> '
+        st.markdown(kw_html, unsafe_allow_html=True)
+    else:
+        st.caption("No keywords yet. Add at least one to continue.")
+
+    add_col, btn_col = st.columns([4, 1])
+    with add_col:
+        first_kw = st.text_input(
+            "Add a keyword:",
+            placeholder="e.g. meeting, invoice, project name...",
+            key="first_page_keyword_input",
+        )
+    with btn_col:
+        st.markdown("<br>", unsafe_allow_html=True)
+        add_first_kw = st.button("Add Keyword", key="first_page_add_kw", width='stretch')
+
+    if add_first_kw and first_kw.strip():
+        kw = first_kw.strip().lower()
+        if kw not in [k.lower() for k in st.session_state.user_keywords]:
+            st.session_state.user_keywords.append(kw)
+            save_keywords(st.session_state.user_keywords)
+            st.rerun()
+
+    if current_kws:
+        remove_kw = st.multiselect(
+            "Remove a keyword:",
+            current_kws,
+            key="first_page_remove_kw",
+        )
+        if st.button("Remove Selected", key="first_page_remove_btn") and remove_kw:
+            st.session_state.user_keywords = [
+                k for k in st.session_state.user_keywords if k not in remove_kw
+            ]
+            save_keywords(st.session_state.user_keywords)
+            st.rerun()
+
+    st.markdown("---")
+    st.caption(
+        f"You have {len(st.session_state.user_keywords)} keyword(s) set. "
+        "Ready to fetch emails."
+    )
+
+    if st.button("Continue - Fetch and Analyze Emails", type="primary", width='stretch'):
+        st.session_state.ready_to_fetch = True
+        st.rerun()
+
+    st.stop()
+
+
+# ============================================================
+# STEP 3: INITIAL EMAIL FETCH + CLASSIFY
+# ============================================================
+if not st.session_state.emails_loaded:
+    st.title("Gmail Spam Detector")
+    st.markdown(f"Connected to **{st.session_state.profile.get('email', '')}**")
+    st.markdown("---")
+
     status_msg = st.empty()
-    progress = st.progress(0, text="Fetching emails from Gmail…")
+    progress = st.progress(0, text="Fetching emails from Gmail...")
 
     try:
-        status_msg.info("📥 Fetching your inbox…")
-        emails = fetch_emails(st.session_state.service, max_results=30)
-        progress.progress(0.4, text=f"Fetched {len(emails)} emails. Classifying…")
+        status_msg.info("Fetching your inbox...")
+        emails, next_page_token = fetch_emails_page(
+            st.session_state.service,
+            max_results=30,
+            page_token=None,
+        )
+        progress.progress(0.4, text=f"Fetched {len(emails)} emails. Classifying...")
 
         if not emails:
             st.warning("No emails found in inbox.")
@@ -654,25 +824,27 @@ if not st.session_state.emails_loaded:
             email = classify_email(spam_model, vectorizer, category_model, email, user_kw)
             classified.append(email)
             pct = 0.4 + (0.6 * (idx + 1) / total)
-            progress.progress(pct, text=f"Classifying email {idx + 1}/{total}…")
+            progress.progress(pct, text=f"Classifying email {idx + 1}/{total}...")
 
         st.session_state.classified_emails = classified
         st.session_state.last_check = datetime.now()
         st.session_state.emails_loaded = True
+        st.session_state.inbox_next_page_token = next_page_token
+        st.session_state.analyzed_count = len(classified)
         progress.empty()
         status_msg.empty()
         st.rerun()
 
     except Exception as e:
         progress.empty()
-        status_msg.error(f"❌ Failed to fetch emails: {e}")
-        if st.button("🔄 Retry"):
+        status_msg.error(f"Failed to fetch emails: {e}")
+        if st.button("Retry"):
             st.rerun()
         st.stop()
 
 
 # ============================================================
-# STEP 3: AUTO-REFRESH FRAGMENT (non-blocking)
+# STEP 4: AUTO-REFRESH FRAGMENT (non-blocking)
 # Runs independently every N seconds without freezing the UI.
 # ============================================================
 @st.fragment(run_every=timedelta(seconds=AUTO_REFRESH_SECONDS))
@@ -700,9 +872,9 @@ def auto_check_new_emails():
             # Toast with keyword match info
             kw_matches = [e for e in new_emails if e.get('matched_keywords')]
             if kw_matches:
-                st.toast(f"🔔 {len(new_emails)} new email(s)! ⭐ {len(kw_matches)} match your keywords!")
+                st.toast(f"{len(new_emails)} new email(s)! Important {len(kw_matches)} match your keywords!")
             else:
-                st.toast(f"🔔 {len(new_emails)} new email(s) detected!")
+                st.toast(f"{len(new_emails)} new email(s) detected!")
         else:
             st.session_state.last_check = datetime.now()
     except Exception:
@@ -714,7 +886,7 @@ auto_check_new_emails()
 
 
 # ============================================================
-# STEP 4: SCHEDULED REPORT AUTO-CHECK
+# STEP 5: SCHEDULED REPORT AUTO-CHECK
 # Checks every 60 seconds if a scheduled report is due
 # ============================================================
 @st.fragment(run_every=timedelta(seconds=60))
@@ -799,7 +971,7 @@ def auto_scheduled_report():
         'spam_pct': round(spam_pct_val, 1),
     }
     st.session_state.report_notifications.insert(0, notif)
-    st.toast(f"📋 {freq} spam report generated! Check it in the sidebar.")
+    st.toast(f"Report {freq} spam report generated! Check it in the sidebar.")
 
 
 auto_scheduled_report()
@@ -808,14 +980,67 @@ auto_scheduled_report()
 # ============================================================
 # MAIN DASHBOARD
 # ============================================================
-st.title("📧 Gmail Spam Detector")
 profile = st.session_state.profile
 last_time = st.session_state.last_check
 last_str = last_time.strftime('%I:%M:%S %p') if last_time else 'N/A'
-st.markdown(
-    f"Connected to: **{profile.get('email', '')}** &nbsp;|&nbsp; "
-    f"Last checked: **{last_str}**"
-)
+
+hdr_left, hdr_right = st.columns([5, 1])
+with hdr_left:
+    st.markdown("# 📧 Gmail Spam Detector")
+    st.markdown(
+        f"Connected to: **{profile.get('email', '')}** &nbsp;|&nbsp; "
+        f"Last checked: **{last_str}**"
+    )
+with hdr_right:
+    st.markdown("<div style='height: 0.35rem;'></div>", unsafe_allow_html=True)
+    if st.button("🔌 Disconnect Gmail", key="top_disconnect", width='stretch'):
+        disconnect_gmail_session()
+        st.rerun()
+
+st.markdown("""
+<div class="analyze-shell">
+    <strong>🚀 Analyze Inbox in Batches</strong><br>
+    Process emails in focused chunks of 30 for faster, cleaner review.
+</div>
+""", unsafe_allow_html=True)
+
+total_messages = int(profile.get('total_messages', 0) or 0)
+approx_remaining = max(total_messages - len(st.session_state.classified_emails), 0)
+if st.button("🚀 Analyze Next 30", key="main_analyze_next_30", type="primary", width='stretch'):
+    try:
+        service = st.session_state.service
+        page_token = st.session_state.inbox_next_page_token
+        if not page_token:
+            st.info("✅ All inbox pages have already been analyzed.")
+        else:
+            batch, next_page_token = fetch_emails_page(
+                service,
+                max_results=30,
+                page_token=page_token,
+            )
+
+            known_ids = set(e['id'] for e in st.session_state.classified_emails)
+            batch = [e for e in batch if e['id'] not in known_ids]
+
+            if batch:
+                user_kw = st.session_state.user_keywords
+                for email in batch:
+                    classify_email(spam_model, vectorizer, category_model, email, user_kw)
+                st.session_state.classified_emails.extend(batch)
+                st.session_state.analyzed_count += len(batch)
+                st.session_state.last_check = datetime.now()
+                st.success(
+                    f"Analyzed {len(batch)} more emails (total analyzed: {st.session_state.analyzed_count})."
+                )
+            else:
+                st.info("No unseen emails found in the next page.")
+
+            st.session_state.inbox_next_page_token = next_page_token
+            if not next_page_token:
+                st.info("✅ Inbox analysis is complete. No more pages left.")
+            st.rerun()
+    except Exception as e:
+        st.error(f"Analyze Next 30 failed: {e}")
 
 all_emails = st.session_state.classified_emails
 spam_emails = [e for e in all_emails if e.get('prediction') == 'SPAM']
@@ -833,7 +1058,7 @@ col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.markdown(f"""
     <div class="info-card">
-        <div class="big-number">📧 {len(all_emails)}</div>
+        <div class="big-number">📨 {len(all_emails)}</div>
         <div class="center-text">Total Emails</div>
     </div>
     """, unsafe_allow_html=True)
@@ -841,7 +1066,7 @@ with col1:
 with col2:
     st.markdown(f"""
     <div class="spam-card">
-        <div class="big-number">🚨 {len(spam_emails)}</div>
+        <div class="big-number">🚫 {len(spam_emails)}</div>
         <div class="center-text">Spam Detected</div>
     </div>
     """, unsafe_allow_html=True)
@@ -857,7 +1082,7 @@ with col3:
 with col4:
     st.markdown(f"""
     <div class="alert-card">
-        <div class="big-number">🔵 {len(unread_emails)}</div>
+        <div class="big-number">📩 {len(unread_emails)}</div>
         <div class="center-text">Unread</div>
     </div>
     """, unsafe_allow_html=True)
@@ -875,11 +1100,11 @@ if all_emails:
         st.progress((100 - spam_pct) / 100)
     with col2:
         if spam_pct > 50:
-            st.error(f"⚠️ {spam_pct:.0f}% spam!")
+            st.error(f"Warning: {spam_pct:.0f}% spam!")
         elif spam_pct > 20:
-            st.warning(f"⚠️ {spam_pct:.0f}% spam")
+            st.warning(f"Warning: {spam_pct:.0f}% spam")
         else:
-            st.success(f"✅ Only {spam_pct:.0f}% spam")
+            st.success(f"Only {spam_pct:.0f}% spam")
 
 
 # ============================================================
@@ -887,24 +1112,24 @@ if all_emails:
 # ============================================================
 if st.session_state.report_notifications:
     st.markdown("---")
-    st.markdown("### 📋 Report Notifications")
+    st.markdown("### Report Notifications")
     for i, notif in enumerate(st.session_state.report_notifications):
         freq_lower = notif.get('freq', 'daily').lower()
-        freq_icon = {'daily': '📅', 'weekly': '📆', 'monthly': '🗓️'}.get(freq_lower, '📋')
+        freq_icon = {'daily': 'Daily', 'weekly': 'Weekly', 'monthly': 'Monthly'}.get(freq_lower, 'Report')
         st.markdown(f"""
         <div class="report-notification {freq_lower}">
             <div>
                 <strong>{freq_icon} {notif['freq']} Report Ready!</strong><br>
                 {notif['message']}<br>
-                <small>📊 {notif['total']} emails analyzed &nbsp;|&nbsp; 
-                🚨 {notif['spam_count']} spam ({notif['spam_pct']}%) &nbsp;|&nbsp; 
-                ✅ {notif['safe_count']} safe &nbsp;|&nbsp;
-                🕐 Generated: {notif['time']}</small>
+                <small>Analytics {notif['total']} emails analyzed &nbsp;|&nbsp; 
+                Spam: {notif['spam_count']} spam ({notif['spam_pct']}%) &nbsp;|&nbsp; 
+                Safe {notif['safe_count']} safe &nbsp;|&nbsp;
+                Generated: {notif['time']}</small>
             </div>
         </div>
         """, unsafe_allow_html=True)
 
-    if st.button("✖ Dismiss Report Notifications", key="dismiss_report_notifs"):
+    if st.button("Dismiss Report Notifications", key="dismiss_report_notifs"):
         st.session_state.report_notifications = []
         st.rerun()
 
@@ -913,9 +1138,9 @@ if st.session_state.report_notifications:
 # ============================================================
 if st.session_state.new_alerts:
     st.markdown("---")
-    st.markdown("### 🔔 New Email Alerts")
+    st.markdown("### New Email Alerts")
     for email in st.session_state.new_alerts:
-        icon = "🚨" if email.get('prediction') == 'SPAM' else "✅"
+        icon = "Spam" if email.get('prediction') == 'SPAM' else "Safe"
         card = "spam-card" if email.get('prediction') == 'SPAM' else "ham-card"
         st.markdown(f"""
         <div class="{card}">
@@ -925,11 +1150,11 @@ if st.session_state.new_alerts:
             ({email.get('confidence', 0):.1f}%) |
             Category: <strong>{email.get('category', '?')}</strong> |
             Sub: <strong>{email.get('sub_category', '?')}</strong>
-            {'| <span class="keyword-match">⭐ ' + ', '.join(email.get('matched_keywords', [])) + '</span>' if email.get('matched_keywords') else ''}
+            {'| <span class="keyword-match">Important ' + ', '.join(email.get('matched_keywords', [])) + '</span>' if email.get('matched_keywords') else ''}
         </div>
         """, unsafe_allow_html=True)
 
-    if st.button("✖ Clear Alerts"):
+    if st.button("Clear Alerts"):
         st.session_state.new_alerts = []
         st.rerun()
 
@@ -939,11 +1164,11 @@ if st.session_state.new_alerts:
 # ============================================================
 st.markdown("---")
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📋 All Emails",
-    "🚨 Spam Emails",
+    "📥 All Emails",
+    "🚫 Spam Emails",
     "✅ Safe Emails",
-    "📂 Categories",
-    "⭐ Keywords",
+    "🗂️ Categories",
+    "🔑 Keywords",
     "📊 Analytics"
 ])
 
@@ -952,7 +1177,7 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 with tab1:
     st.markdown(f"### All Emails ({len(all_emails)})")
 
-    search = st.text_input("🔍 Search emails:", placeholder="Search by subject, sender…")
+    search = st.text_input("Search emails:", placeholder="Search by subject, sender...")
 
     filtered = all_emails
     if search:
@@ -966,8 +1191,8 @@ with tab1:
     for email in filtered:
         is_spam = email.get('prediction') == 'SPAM'
         card = "spam-card" if is_spam else "ham-card"
-        icon = "🚨" if is_spam else "✅"
-        unread = "🔵 " if email.get('is_unread') else ""
+        icon = "Spam" if is_spam else "Safe"
+        unread = "Unread: " if email.get('is_unread') else ""
 
         st.markdown(f"""
         <div class="{card}">
@@ -978,8 +1203,8 @@ with tab1:
             ({email.get('confidence', 0):.1f}%) |
             <strong>Category:</strong> {email.get('category', '?')} |
             <strong>Sub:</strong> {email.get('sub_category', '?')}
-            {'| <span class="keyword-match">⭐ ' + ', '.join(email.get('matched_keywords', [])) + '</span>' if email.get('matched_keywords') else ''}<br>
-            <strong>Preview:</strong> {email.get('snippet', '')[:150]}…
+            {'| <span class="keyword-match">Important ' + ', '.join(email.get('matched_keywords', [])) + '</span>' if email.get('matched_keywords') else ''}<br>
+            <strong>Preview:</strong> {email.get('snippet', '')[:150]}...
         </div>
         """, unsafe_allow_html=True)
 
@@ -987,7 +1212,7 @@ with tab1:
 # --- Tab 2: Spam Emails ---
 with tab2:
     if spam_emails:
-        st.error(f"### 🚨 {len(spam_emails)} Spam Emails Detected!")
+        st.error(f"### {len(spam_emails)} Spam Emails Detected")
 
         spam_cats = {}
         for e in spam_emails:
@@ -995,24 +1220,24 @@ with tab2:
             spam_cats.setdefault(cat, []).append(e)
 
         for cat, emails_list in spam_cats.items():
-            with st.expander(f"🚨 {cat} ({len(emails_list)} emails)", expanded=True):
+            with st.expander(f"{cat} ({len(emails_list)} emails)", expanded=True):
                 for email in emails_list:
                     st.markdown(f"""
                     <div class="spam-card">
                         <strong>{email['subject']}</strong><br>
                         From: {email['sender']} | Date: {email.get('date', '')}<br>
                         Confidence: {email.get('confidence', 0):.1f}%<br>
-                        Preview: {email.get('snippet', '')[:120]}…
+                        Preview: {email.get('snippet', '')[:120]}...
                     </div>
                     """, unsafe_allow_html=True)
     else:
-        st.success("🎉 No spam detected! Your inbox is clean!")
+        st.success("No spam detected! Your inbox is clean!")
 
 
 # --- Tab 3: Safe Emails ---
 with tab3:
     if safe_emails:
-        st.success(f"### ✅ {len(safe_emails)} Safe Emails")
+        st.success(f"### {len(safe_emails)} Safe Emails")
 
         safe_cats = {}
         for e in safe_emails:
@@ -1020,7 +1245,7 @@ with tab3:
             safe_cats.setdefault(cat, []).append(e)
 
         for cat, emails_list in safe_cats.items():
-            with st.expander(f"✅ {cat} ({len(emails_list)} emails)", expanded=False):
+            with st.expander(f"{cat} ({len(emails_list)} emails)", expanded=False):
                 for email in emails_list:
                     st.markdown(f"""
                     <div class="ham-card">
@@ -1028,7 +1253,7 @@ with tab3:
                         From: {email['sender']} | Date: {email.get('date', '')}<br>
                         Category: {email.get('category', '?')} |
                         Confidence: {email.get('confidence', 0):.1f}%<br>
-                        Preview: {email.get('snippet', '')[:120]}…
+                        Preview: {email.get('snippet', '')[:120]}...
                     </div>
                     """, unsafe_allow_html=True)
     else:
@@ -1037,7 +1262,7 @@ with tab3:
 
 # --- Tab 4: Categories ---
 with tab4:
-    st.markdown("### 📂 Email Categories")
+    st.markdown("### Email Categories")
 
     all_cats = {}
     for e in all_emails:
@@ -1053,10 +1278,10 @@ with tab4:
         with cols[idx % 3]:
             st.markdown(f"""
             <div class="info-card">
-                <strong>📂 {cat}</strong><br>
+                <strong>{cat}</strong><br>
                 Total: {len(emails_list)} |
-                🚨 {spam_in_cat} spam |
-                ✅ {safe_in_cat} safe
+                Spam: {spam_in_cat} spam |
+                Safe {safe_in_cat} safe
             </div>
             """, unsafe_allow_html=True)
 
@@ -1064,25 +1289,25 @@ with tab4:
 
     selected_cat = st.selectbox("Select category to view:", list(all_cats.keys()))
     if selected_cat and selected_cat in all_cats:
-        st.markdown(f"#### 📂 {selected_cat}")
+        st.markdown(f"#### {selected_cat}")
         for email in all_cats[selected_cat]:
             is_spam = email.get('prediction') == 'SPAM'
             card = "spam-card" if is_spam else "ham-card"
-            icon = "🚨" if is_spam else "✅"
+            icon = "Spam" if is_spam else "Safe"
             st.markdown(f"""
             <div class="{card}">
                 <strong>{icon} {email['subject']}</strong><br>
                 From: {email['sender']} |
                 {email.get('prediction', '?')} ({email.get('confidence', 0):.1f}%)<br>
                 Sub-category: {email.get('sub_category', '?')}<br>
-                Preview: {email.get('snippet', '')[:120]}…
+                Preview: {email.get('snippet', '')[:120]}...
             </div>
             """, unsafe_allow_html=True)
 
 
 # --- Tab 5: Keywords ---
 with tab5:
-    st.markdown("### ⭐ Keyword-Based Importance")
+    st.markdown("### Keyword-Based Importance")
 
     st.markdown(
         "Set keywords that matter to you. Emails matching these keywords "
@@ -1094,12 +1319,12 @@ with tab5:
     with kw_col1:
         new_kw = st.text_input(
             "Add keyword:",
-            placeholder="e.g. meeting, deadline, invoice, professor…",
+            placeholder="e.g. meeting, deadline, invoice, professor...",
             key="new_keyword_input"
         )
     with kw_col2:
         st.markdown("<br>", unsafe_allow_html=True)
-        add_clicked = st.button("➕ Add Keyword", width='stretch')
+        add_clicked = st.button("Add Keyword", width='stretch')
 
     if add_clicked and new_kw.strip():
         kw = new_kw.strip().lower()
@@ -1132,7 +1357,7 @@ with tab5:
             current_kws,
             key="kw_delete_select"
         )
-        if st.button("🗑️ Delete Selected Keywords"):
+        if st.button("Delete Selected Keywords"):
             if kw_to_delete:
                 st.session_state.user_keywords = [
                     k for k in st.session_state.user_keywords if k not in kw_to_delete
@@ -1148,24 +1373,24 @@ with tab5:
 
         # --- Show important emails ---
         st.markdown("---")
-        st.markdown(f"#### ⭐ Important Emails ({len(important_emails)})")
+        st.markdown(f"#### Important Emails ({len(important_emails)})")
 
         if important_emails:
             for email in important_emails:
                 is_spam = email.get('prediction') == 'SPAM'
                 card = "spam-card" if is_spam else "important-card"
-                icon = "🚨" if is_spam else "⭐"
+                icon = "Spam" if is_spam else "Important"
                 matched_str = ", ".join(email.get('matched_keywords', []))
                 st.markdown(f"""
                 <div class="{card}">
                     <strong>{icon} {email['subject']}</strong>
-                    <span class="keyword-match">🔑 {matched_str}</span><br>
+                    <span class="keyword-match">Keywords: {matched_str}</span><br>
                     <strong>From:</strong> {email['sender']}<br>
                     <strong>Date:</strong> {email.get('date', '')}<br>
                     <strong>Result:</strong> {email.get('prediction', '?')}
                     ({email.get('confidence', 0):.1f}%) |
                     <strong>Category:</strong> {email.get('category', '?')}<br>
-                    <strong>Preview:</strong> {email.get('snippet', '')[:150]}…
+                    <strong>Preview:</strong> {email.get('snippet', '')[:150]}...
                 </div>
                 """, unsafe_allow_html=True)
         else:
@@ -1176,7 +1401,7 @@ with tab5:
 
 # --- Tab 6: Analytics ---
 with tab6:
-    st.markdown("### 📊 Email Analytics")
+    st.markdown("### Email Analytics")
 
     col1, col2 = st.columns(2)
 
@@ -1233,7 +1458,7 @@ with tab6:
 
     csv = df.to_csv(index=False)
     st.download_button(
-        label="📥 Download Report as CSV",
+        label="Download Report as CSV",
         data=csv,
         file_name=f"spam_report_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
         mime="text/csv"
@@ -1244,20 +1469,29 @@ with tab6:
 # SIDEBAR: CONTROLS
 # ============================================================
 with st.sidebar:
-    st.header("📬 Account")
+    st.header("👤 Account")
     st.markdown(f"**{profile.get('email', '')}**")
     st.markdown(f"Total messages: {profile.get('total_messages', 'N/A')}")
 
+    st.markdown(
+        f"<div style='font-weight:700; color:#1f4ed8; margin:8px 0 4px 0;'>📊 Analyzed so far: {len(st.session_state.classified_emails)}</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"<div style='font-weight:700; color:#15803d; margin:0 0 8px 0;'>📬 Approx remaining: {approx_remaining}</div>",
+        unsafe_allow_html=True,
+    )
+
     st.divider()
 
-    st.header("🔔 Real-time Monitor")
+    st.header("📡 Real-time Monitor")
     st.session_state.auto_refresh = st.toggle(
         "Auto-check new emails",
         value=st.session_state.auto_refresh,
         help=f"Automatically checks for new emails every {AUTO_REFRESH_SECONDS} seconds"
     )
 
-    if st.button("🔍 Check Now", width='stretch'):
+    if st.button("Check Now", width='stretch'):
         try:
             service = st.session_state.service
             known_ids = set(e['id'] for e in st.session_state.classified_emails)
@@ -1269,7 +1503,7 @@ with st.sidebar:
                 st.session_state.new_alerts = new + st.session_state.new_alerts
                 st.session_state.classified_emails = new + st.session_state.classified_emails
                 st.session_state.last_check = datetime.now()
-                st.success(f"🔔 {len(new)} new emails found!")
+                st.success(f"{len(new)} new emails found!")
                 st.rerun()
             else:
                 st.session_state.last_check = datetime.now()
@@ -1277,20 +1511,14 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Error: {e}")
 
-    if st.button("🔄 Re-scan All Emails", width='stretch'):
+    if st.button("Re-scan All Emails", width='stretch'):
+        st.session_state.ready_to_fetch = False
         st.session_state.emails_loaded = False
         st.session_state.classified_emails = []
         st.session_state.new_alerts = []
+        st.session_state.inbox_next_page_token = None
+        st.session_state.analyzed_count = 0
         st.rerun()
-
-    st.divider()
-
-    st.header("📊 Quick Stats")
-    st.metric("Total", len(all_emails))
-    st.metric("Spam", len(spam_emails))
-    st.metric("Safe", len(safe_emails))
-    st.metric("Unread", len(unread_emails))
-
     st.divider()
 
     # Keyword management shortcut in sidebar
@@ -1304,7 +1532,7 @@ with st.sidebar:
         st.caption("No keywords set")
 
     sidebar_kw = st.text_input("Quick add keyword:", key="sidebar_kw_input", placeholder="e.g. meeting")
-    if st.button("➕ Add", key="sidebar_kw_btn"):
+    if st.button("Add", key="sidebar_kw_btn"):
         if sidebar_kw.strip():
             kw = sidebar_kw.strip().lower()
             if kw not in [k.lower() for k in st.session_state.user_keywords]:
@@ -1319,12 +1547,12 @@ with st.sidebar:
     st.divider()
 
     # Report schedule status
-    st.header("📑 Scheduled Reports")
+    st.header("🗓️ Scheduled Reports")
 
     freq_options = ['Off', 'Daily', 'Weekly', 'Monthly']
     current_freq = st.session_state.report_settings.get('frequency', 'Off')
     selected_freq = st.selectbox(
-        "⏰ Report frequency:",
+        "Report frequency:",
         freq_options,
         index=freq_options.index(current_freq) if current_freq in freq_options else 0,
         key="sidebar_report_freq"
@@ -1337,7 +1565,7 @@ with st.sidebar:
     last_rpt = st.session_state.report_settings.get('last_report')
     st.caption(f"Last report: {last_rpt or 'Never'}")
 
-    if st.button("📑 Generate Report Now", key="sidebar_gen_report", width='stretch'):
+    if st.button("Generate Report Now", key="sidebar_gen_report", width='stretch'):
         now = datetime.now()
         total = len(all_emails)
         spam_count = len(spam_emails)
@@ -1383,14 +1611,14 @@ with st.sidebar:
             'spam_pct': round(spam_pct_val, 1),
         }
         st.session_state.report_notifications.insert(0, notif)
-        st.success("✅ Report generated!")
+        st.success("Report generated!")
         st.rerun()
 
     # Show latest report summary in sidebar
     reports = st.session_state.report_history
     if reports:
         latest = reports[0]
-        st.caption(f"📊 Latest: {latest['spam_count']} spam / {latest['safe_count']} safe ({latest['spam_percentage']}% spam)")
+        st.caption(f"Latest: {latest['spam_count']} spam / {latest['safe_count']} safe ({latest['spam_percentage']}% spam)")
         report_df = pd.DataFrame([{
             'Generated': latest['generated_at'],
             'Total': latest['total_emails'],
@@ -1399,29 +1627,17 @@ with st.sidebar:
             'Spam %': latest['spam_percentage'],
         }])
         st.download_button(
-            "📥 Download Latest Report",
+            "Download Latest Report",
             data=report_df.to_csv(index=False),
             file_name=f"spam_report_{latest['generated_at'].replace(':', '-').replace(' ', '_')}.csv",
             mime="text/csv",
             key="sidebar_dl_report"
         )
 
-        if st.button("🗑️ Clear History", key="sidebar_clear_reports"):
+        if st.button("Clear History", key="sidebar_clear_reports"):
             st.session_state.report_history = []
             save_report_history([])
             st.rerun()
-
-    st.divider()
-
-    if st.button("🔌 Disconnect Gmail", width='stretch'):
-        st.session_state.gmail_connected = False
-        st.session_state.service = None
-        st.session_state.emails_loaded = False
-        st.session_state.classified_emails = []
-        st.session_state.new_alerts = []
-        if os.path.exists(TOKEN_FILE):
-            os.remove(TOKEN_FILE)
-        st.rerun()
 
     st.divider()
 
@@ -1429,7 +1645,7 @@ with st.sidebar:
     st.header("🧪 Quick Test")
     test_text = st.text_area(
         "Test any text:", height=80,
-        placeholder="Paste any email text to classify…"
+        placeholder="Paste any email text to classify..."
     )
     if st.button("Classify", width='stretch'):
         if test_text.strip():
@@ -1438,10 +1654,10 @@ with st.sidebar:
             pred = spam_model.predict(vec)[0]
             conf = spam_model.predict_proba(vec)[0]
             if pred == 1:
-                st.error(f"🚨 SPAM ({conf[1] * 100:.1f}%)")
+                st.error(f"SPAM ({conf[1] * 100:.1f}%)")
             else:
                 cat = category_model.predict(vec)[0]
                 cat_map = {'work': 'Work', 'promotional': 'Promotional', 'academic': 'Academic'}
                 cat_name = cat_map.get(cat, cat.title())
-                st.success(f"✅ NOT SPAM ({conf[0] * 100:.1f}%)")
-                st.info(f"📂 Category: {cat_name}")
+                st.success(f"NOT SPAM ({conf[0] * 100:.1f}%)")
+                st.info(f"Category: {cat_name}")
