@@ -527,61 +527,79 @@ def get_user_profile(service):
 
 def _parse_email_message(service, msg_id):
     """Parse a single Gmail message into a dict."""
-    message = service.users().messages().get(
-        userId='me', id=msg_id, format='full'
-    ).execute()
+    try:
+        message = service.users().messages().get(
+            userId='me', id=msg_id, format='full'
+        ).execute()
+    except Exception as e:
+        print(f"❌ Failed to fetch message {msg_id}: {e}")
+        raise
 
-    headers = message['payload']['headers']
-    subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
-    sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
-    date = next((h['value'] for h in headers if h['name'] == 'Date'), 'Unknown')
+    try:
+        headers = message['payload']['headers']
+        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
+        sender = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
+        date = next((h['value'] for h in headers if h['name'] == 'Date'), 'Unknown')
 
-    body = ''
-    if 'parts' in message['payload']:
-        for part in message['payload']['parts']:
-            if part['mimeType'] == 'text/plain':
-                body = base64.urlsafe_b64decode(
-                    part['body'].get('data', '')
-                ).decode('utf-8', errors='ignore')
-                break
-    elif 'body' in message['payload'] and 'data' in message['payload']['body']:
-        body = base64.urlsafe_b64decode(
-            message['payload']['body']['data']
-        ).decode('utf-8', errors='ignore')
+        body = ''
+        if 'parts' in message['payload']:
+            for part in message['payload']['parts']:
+                if part['mimeType'] == 'text/plain':
+                    body = base64.urlsafe_b64decode(
+                        part['body'].get('data', '')
+                    ).decode('utf-8', errors='ignore')
+                    break
+        elif 'body' in message['payload'] and 'data' in message['payload']['body']:
+            body = base64.urlsafe_b64decode(
+                message['payload']['body']['data']
+            ).decode('utf-8', errors='ignore')
 
-    labels = message.get('labelIds', [])
+        labels = message.get('labelIds', [])
 
-    return {
-        'id': msg_id,
-        'subject': subject,
-        'sender': sender,
-        'date': date,
-        'body': body,
-        'snippet': message.get('snippet', ''),
-        'is_unread': 'UNREAD' in labels,
-    }
+        return {
+            'id': msg_id,
+            'subject': subject,
+            'sender': sender,
+            'date': date,
+            'body': body,
+            'snippet': message.get('snippet', ''),
+            'is_unread': 'UNREAD' in labels,
+        }
+    except Exception as e:
+        print(f"❌ Failed to parse message {msg_id}: {e}")
+        raise
 
 
 def fetch_emails_page(service, max_results=50, page_token=None):
     """Fetch one inbox page and return (emails, next_page_token)."""
-    params = {
-        'userId': 'me',
-        'maxResults': max_results,
-        'labelIds': ['INBOX'],
-    }
-    if page_token:
-        params['pageToken'] = page_token
+    try:
+        params = {
+            'userId': 'me',
+            'maxResults': max_results,
+            'labelIds': ['INBOX'],
+        }
+        if page_token:
+            params['pageToken'] = page_token
 
-    results = service.users().messages().list(**params).execute()
-    messages = results.get('messages', [])
-    next_page_token = results.get('nextPageToken')
+        results = service.users().messages().list(**params).execute()
+        messages = results.get('messages', [])
+        next_page_token = results.get('nextPageToken')
+        print(f"✅ Fetched {len(messages)} message IDs from Gmail API")
+    except Exception as e:
+        print(f"❌ Failed to list messages: {e}")
+        raise
 
     emails = []
     for msg in messages:
         try:
-            emails.append(_parse_email_message(service, msg['id']))
-        except Exception:
+            email = _parse_email_message(service, msg['id'])
+            emails.append(email)
+            print(f"✅ Parsed email: {email.get('subject', 'No Subject')[:50]}")
+        except Exception as e:
+            print(f"⚠️ Skipping email {msg['id']}: {e}")
             continue
+    
+    print(f"✅ Successfully parsed {len(emails)} out of {len(messages)} messages")
     return emails, next_page_token
 
 
@@ -782,11 +800,13 @@ if not st.session_state.emails_loaded:
 
     try:
         status_msg.info("Fetching your inbox...")
+        print(f"📧 Attempting initial fetch with service: {st.session_state.service}")
         emails, next_page_token = fetch_emails_page(
             st.session_state.service,
             max_results=30,
             page_token=None,
         )
+        print(f"✅ Initial fetch returned {len(emails)} emails")
         progress.progress(0.4, text=f"Fetched {len(emails)} emails. Classifying...")
 
         if not emails:
@@ -1000,7 +1020,13 @@ approx_remaining = max(total_messages - len(st.session_state.classified_emails),
 if st.button("?? Analyze Next 30", key="main_analyze_next_30", type="primary", width='stretch'):
     try:
         service = st.session_state.service
+        if not service:
+            st.error("❌ Gmail service not connected. Please reconnect.")
+            st.stop()
+        
         page_token = st.session_state.inbox_next_page_token
+        print(f"🔍 Starting email fetch: page_token={page_token}")
+        
         if not page_token:
             st.info("? All inbox pages have already been analyzed.")
         else:
@@ -1010,6 +1036,8 @@ if st.button("?? Analyze Next 30", key="main_analyze_next_30", type="primary", w
                 page_token=page_token,
             )
 
+            print(f"📊 Fetched batch of {len(batch)} emails")
+            
             known_ids = set(e['id'] for e in st.session_state.classified_emails)
             batch = [e for e in batch if e['id'] not in known_ids]
 
@@ -1031,7 +1059,10 @@ if st.button("?? Analyze Next 30", key="main_analyze_next_30", type="primary", w
                 st.info("? Inbox analysis is complete. No more pages left.")
             st.rerun()
     except Exception as e:
-        st.error(f"Analyze Next 30 failed: {e}")
+        st.error(f"❌ Analyze Next 30 failed: {e}")
+        print(f"❌ Exception in Analyze Next 30: {e}")
+        import traceback
+        print(traceback.format_exc())
 
 all_emails = st.session_state.classified_emails
 spam_emails = [e for e in all_emails if e.get('prediction') == 'SPAM']
