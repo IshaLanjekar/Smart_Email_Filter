@@ -532,7 +532,8 @@ def _parse_email_message(service, msg_id):
             userId='me', id=msg_id, format='full'
         ).execute()
     except Exception as e:
-        print(f"❌ Failed to fetch message {msg_id}: {e}")
+        error_msg = f"Failed to fetch message {msg_id}: {type(e).__name__}: {str(e)}"
+        st.error(f"❌ {error_msg}")
         raise
 
     try:
@@ -566,7 +567,8 @@ def _parse_email_message(service, msg_id):
             'is_unread': 'UNREAD' in labels,
         }
     except Exception as e:
-        print(f"❌ Failed to parse message {msg_id}: {e}")
+        error_msg = f"Failed to parse message {msg_id}: {type(e).__name__}: {str(e)}"
+        st.error(f"❌ {error_msg}")
         raise
 
 
@@ -584,22 +586,27 @@ def fetch_emails_page(service, max_results=50, page_token=None):
         results = service.users().messages().list(**params).execute()
         messages = results.get('messages', [])
         next_page_token = results.get('nextPageToken')
-        print(f"✅ Fetched {len(messages)} message IDs from Gmail API")
     except Exception as e:
-        print(f"❌ Failed to list messages: {e}")
+        error_msg = f"❌ Gmail API Error (list messages): {type(e).__name__}: {str(e)}"
+        print(error_msg)
+        st.error(error_msg)
         raise
 
     emails = []
+    failed_count = 0
     for msg in messages:
         try:
             email = _parse_email_message(service, msg['id'])
             emails.append(email)
-            print(f"✅ Parsed email: {email.get('subject', 'No Subject')[:50]}")
         except Exception as e:
-            print(f"⚠️ Skipping email {msg['id']}: {e}")
+            failed_count += 1
+            error_detail = f"Email {msg['id']}: {type(e).__name__}: {str(e)[:100]}"
+            print(f"⚠️ {error_detail}")
             continue
     
-    print(f"✅ Successfully parsed {len(emails)} out of {len(messages)} messages")
+    if failed_count > 0:
+        st.warning(f"⚠️ Failed to parse {failed_count} out of {len(messages)} emails")
+    
     return emails, next_page_token
 
 
@@ -800,13 +807,11 @@ if not st.session_state.emails_loaded:
 
     try:
         status_msg.info("Fetching your inbox...")
-        print(f"📧 Attempting initial fetch with service: {st.session_state.service}")
         emails, next_page_token = fetch_emails_page(
             st.session_state.service,
             max_results=30,
             page_token=None,
         )
-        print(f"✅ Initial fetch returned {len(emails)} emails")
         progress.progress(0.4, text=f"Fetched {len(emails)} emails. Classifying...")
 
         if not emails:
@@ -1025,7 +1030,6 @@ if st.button("?? Analyze Next 30", key="main_analyze_next_30", type="primary", w
             st.stop()
         
         page_token = st.session_state.inbox_next_page_token
-        print(f"🔍 Starting email fetch: page_token={page_token}")
         
         if not page_token:
             st.info("? All inbox pages have already been analyzed.")
@@ -1036,8 +1040,6 @@ if st.button("?? Analyze Next 30", key="main_analyze_next_30", type="primary", w
                 page_token=page_token,
             )
 
-            print(f"📊 Fetched batch of {len(batch)} emails")
-            
             known_ids = set(e['id'] for e in st.session_state.classified_emails)
             batch = [e for e in batch if e['id'] not in known_ids]
 
@@ -1049,20 +1051,17 @@ if st.button("?? Analyze Next 30", key="main_analyze_next_30", type="primary", w
                 st.session_state.analyzed_count += len(batch)
                 st.session_state.last_check = datetime.now()
                 st.success(
-                    f"Analyzed {len(batch)} more emails (total analyzed: {st.session_state.analyzed_count})."
+                    f"✅ Analyzed {len(batch)} more emails (total analyzed: {st.session_state.analyzed_count})."
                 )
             else:
-                st.info("No unseen emails found in the next page.")
+                st.info("ℹ️ No unseen emails found in the next page.")
 
             st.session_state.inbox_next_page_token = next_page_token
             if not next_page_token:
-                st.info("? Inbox analysis is complete. No more pages left.")
+                st.info("ℹ️ Inbox analysis is complete. No more pages left.")
             st.rerun()
     except Exception as e:
-        st.error(f"❌ Analyze Next 30 failed: {e}")
-        print(f"❌ Exception in Analyze Next 30: {e}")
-        import traceback
-        print(traceback.format_exc())
+        st.error(f"❌ Analyze Next 30 failed: {type(e).__name__}: {str(e)}")
 
 all_emails = st.session_state.classified_emails
 spam_emails = [e for e in all_emails if e.get('prediction') == 'SPAM']
