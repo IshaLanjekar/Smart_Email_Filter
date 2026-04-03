@@ -12,14 +12,6 @@ from nltk.corpus import stopwords
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-import streamlit as st
-# Add this debug line temporarily:
-if 'CI' not in os.environ:  # Only show in deployed cloud, not local
-    try:
-        test_secrets = st.secrets.get('gmail', {})
-        st.write(f"DEBUG: Secrets loaded: {bool(test_secrets)}, Keys: {list(test_secrets.keys()) if hasattr(test_secrets, 'keys') else 'N/A'}")
-    except:
-        st.write("DEBUG: Could not access secrets")
 
 nltk.download('stopwords', quiet=True)
 
