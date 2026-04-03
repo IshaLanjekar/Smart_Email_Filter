@@ -666,6 +666,13 @@ oauth_client_config = load_oauth_client_config()
 if not st.session_state.gmail_connected:
     st.title("Gmail Spam Detector")
     st.markdown("---")
+    
+    # DEBUG: Show what's happening
+    with st.expander("DEBUG: OAuth Status"):
+        st.write(f"Config loaded: {oauth_client_config is not None}")
+        st.write(f"Is web config: {'web' in oauth_client_config if oauth_client_config else False}")
+        st.write(f"Query params: {dict(st.query_params)}")
+        st.write(f"OAuth state in session: {st.session_state.get('oauth_state', 'NOT SET')}")
 
     # Try silent connection first
     service = get_gmail_service_silent()
